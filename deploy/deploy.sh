@@ -72,9 +72,11 @@ cmd_verify() {
 
   echo ""
   echo "--- /mcp tools/list (带鉴权) ---"
-  TOKEN=$(grep '^MCP_AUTH_TOKEN=*** "$PROJECT_DIR/.env" | cut -d= -f2-)
+  # 用 python 读 .env 避免 shell 引号问题
+  TOKEN=$(python3 -c "import sys; sys.stdout.write([l.strip().split('=',1)[1] for l in open('$PROJECT_DIR/.env') if l.startswith('MCP_AUTH_TOKEN=')][0])")
+  echo "Token 长度: ${#TOKEN}"
   curl -sS --max-time 10 -X POST http://127.0.0.1:3037/mcp \
-    -H "Authorization: Bearer *** \
+    -H "Authorization: Bearer ${TOKEN}" \
     -H "Content-Type: application/json" \
     -H "Accept: application/json, text/event-stream" \
     -d '{"jsonrpc":"2.0","method":"tools/list","id":1}' \
@@ -83,7 +85,7 @@ cmd_verify() {
   echo ""
   echo "--- /mcp health_check (带鉴权) ---"
   curl -sS --max-time 10 -X POST http://127.0.0.1:3037/mcp \
-    -H "Authorization: Bearer *** \
+    -H "Authorization: Bearer ${TOKEN}" \
     -H "Content-Type: application/json" \
     -H "Accept: application/json, text/event-stream" \
     -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"health_check","arguments":{}},"id":2}' \
