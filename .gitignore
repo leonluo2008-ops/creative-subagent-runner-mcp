@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Environment & secrets (CRITICAL: never commit)
+.env
+.env.local
+.env.*.local
+*.key
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Test artifacts
+/tmp/
+/test-output/
+
+# Local probes (real LLM calls with real data)
+scripts/test-*.py
+scripts/e2e-*.py
+scripts/list-models.py
+scripts/probe-llm.py
+!scripts/test-llm.ts
