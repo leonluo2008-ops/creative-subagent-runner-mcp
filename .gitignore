@@ -36,3 +36,12 @@ scripts/e2e-*.py
 scripts/list-models.py
 scripts/probe-llm.py
 !scripts/test-llm.ts
+
+# 本机部署相关（不入库,只在本机保留）
+# CLOUD-HERMES-GUIDE.md  含我的 tunnel/域名/token,只给协作方看
+# notion-mcp-config.json  含我的 tunnel URL,只给本机部署参考
+# CONTEXT-COMPRESSED.md   我的部署上下文总结
+CLOUD-HERMES-GUIDE.md
+notion-mcp-config.json
+CONTEXT-COMPRESSED.md
+diagnose-50255*.md

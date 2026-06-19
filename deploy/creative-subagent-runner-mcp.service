@@ -1,59 +1,34 @@
-# =====================================================================
-# creative-subagent-runner-mcp.service
-# 部署到 /etc/systemd/system/creative-subagent-runner-mcp.service
-# 然后:
-#   sudo systemctl daemon-reload
-#   sudo systemctl enable creative-subagent-runner-mcp
-#   sudo systemctl start creative-subagent-runner-mcp
-#   sudo systemctl status creative-subagent-runner-mcp
-#
-# 旁路由 50255 -> 127.0.0.1:3037 即可对外暴露
-# =====================================================================
-
 [Unit]
 Description=Creative Subagent Runner MCP Server (juxinapi GPT + Gemini)
-Documentation=file:///home/luo/Github/creative-subagent-runner-mcp/README.md
+Documentation=file://%h/Github/creative-subagent-runner-mcp/README.md
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-# 用专用用户跑，避免 root 风险
-User=luo
-Group=luo
-WorkingDirectory=/home/luo/Github/creative-subagent-runner-mcp
+# 不要 User= / Group= (用户 systemd 默认就是当前用户)
+WorkingDirectory=%h/Github/creative-subagent-runner-mcp
+
 Environment="NODE_ENV=production"
-Environment="PORT=3037"
-Environment="HOST=0.0.0.0"
-# 关键: 让 systemd 把 .env 读进来
-EnvironmentFile=/home/luo/Github/creative-subagent-runner-mcp/.env
+# PORT / HOST 可选覆盖
+# Environment="PORT=3037"
+# Environment="HOST=0.0.0.0"
 
-ExecStart=/usr/bin/node /home/luo/Github/creative-subagent-runner-mcp/dist/index.js
+EnvironmentFile=%h/Github/creative-subagent-runner-mcp/.env
 
-# 重启策略
+ExecStart=/usr/bin/node %h/Github/creative-subagent-runner-mcp/dist/index.js
+
 Restart=on-failure
 RestartSec=5s
-StartLimitBurst=5
-StartLimitIntervalSec=60s
 
-# 日志
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=creative-subagent-runner-mcp
 
-# 安全加固
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=read-only
-PrivateTmp=true
-ReadWritePaths=/home/luo/Github/creative-subagent-runner-mcp
-# 允许读 .env
-ReadOnlyPaths=/home/luo/Github/creative-subagent-runner-mcp
-
-# 资源限制
-LimitNOFILE=65536
+# 用户 systemd 支持的资源限制
 MemoryMax=512M
 CPUQuota=200%
+LimitNOFILE=65536
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target

@@ -16,7 +16,10 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVICE_NAME="creative-subagent-runner-mcp"
 SERVICE_FILE="$PROJECT_DIR/deploy/${SERVICE_NAME}.service"
-SYSTEMD_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
+SYSTEMD_PATH="$HOME/.config/systemd/user/${SERVICE_NAME}.service"
+
+# 用户 systemd (不需要 root)
+SYSTEMCTL="systemctl --user"
 
 cmd_install() {
   echo "==> 编译 TypeScript"
@@ -31,38 +34,39 @@ cmd_install() {
   chmod 600 "$PROJECT_DIR/.env"
 
   echo "==> 安装 systemd unit 到 $SYSTEMD_PATH"
-  sudo cp "$SERVICE_FILE" "$SYSTEMD_PATH"
-  sudo systemctl daemon-reload
-  sudo systemctl enable "$SERVICE_NAME"
-  sudo systemctl restart "$SERVICE_NAME"
+  mkdir -p "$(dirname "$SYSTEMD_PATH")"
+  cp "$SERVICE_FILE" "$SYSTEMD_PATH"
+  systemctl --user daemon-reload
+  systemctl --user enable "$SERVICE_NAME"
+  systemctl --user restart "$SERVICE_NAME"
 
   sleep 2
   cmd_status
   echo ""
-  echo "✅ 部署完成。旁路由请配置: 60.188.104.7:50255 -> LAN 192.168.101.9:3037"
+  echo "✅ 部署完成。Cloudflare Tunnel 配置请见 README §4.3"
 }
 
 cmd_restart() {
   echo "==> 重启 $SERVICE_NAME"
-  sudo systemctl restart "$SERVICE_NAME"
+  systemctl --user restart "$SERVICE_NAME"
   sleep 2
   cmd_status
 }
 
 cmd_stop() {
   echo "==> 停止 $SERVICE_NAME"
-  sudo systemctl stop "$SERVICE_NAME"
+  systemctl --user stop "$SERVICE_NAME"
 }
 
 cmd_status() {
-  sudo systemctl status "$SERVICE_NAME" --no-pager -l || true
+  systemctl --user status "$SERVICE_NAME" --no-pager -l || true
   echo ""
   echo "==> 监听端口"
   ss -tlnp 2>/dev/null | grep ":3037" || echo "❌ 没在监听 3037"
 }
 
 cmd_logs() {
-  sudo journalctl -u "$SERVICE_NAME" -n 50 --no-pager
+  journalctl --user -u "$SERVICE_NAME" -n 50 --no-pager
 }
 
 cmd_verify() {
@@ -98,10 +102,10 @@ cmd_verify() {
 
 cmd_uninstall() {
   echo "==> 卸载 systemd unit"
-  sudo systemctl stop "$SERVICE_NAME" 2>/dev/null || true
-  sudo systemctl disable "$SERVICE_NAME" 2>/dev/null || true
-  sudo rm -f "$SYSTEMD_PATH"
-  sudo systemctl daemon-reload
+  systemctl --user stop "$SERVICE_NAME" 2>/dev/null || true
+  systemctl --user disable "$SERVICE_NAME" 2>/dev/null || true
+  rm -f "$SYSTEMD_PATH"
+  systemctl --user daemon-reload
   echo "✅ 已卸载（代码保留在 $PROJECT_DIR）"
 }
 

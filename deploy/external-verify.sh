@@ -5,8 +5,8 @@
 # 使用方法 (在另一台机器上):
 #   1. 把这个脚本拷过去 (或直接 curl 下面的命令)
 #   2. 设置两个变量:
-#        export MCP_PUBLIC_URL=http://60.188.104.7:50255
-#        export MCP_AUTH_TOKEN=<你的 MCP_AUTH_TOKEN>
+#        export MCP_PUBLIC_URL=https://mcp.your-domain.com
+#        export MCP_AUTH_TOKEN=<your-token>
 #   3. 跑 ./external-verify.sh
 #
 # 预期结果:
@@ -19,7 +19,7 @@ set -e
 
 if [ -z "$MCP_PUBLIC_URL" ] || [ -z "$MCP_AUTH_TOKEN" ]; then
   echo "❌ 必须设置环境变量:"
-  echo "   export MCP_PUBLIC_URL=http://60.188.104.7:50255"
+  echo "   export MCP_PUBLIC_URL=https://mcp.your-domain.com"
   echo "   export MCP_AUTH_TOKEN=<your-token>"
   exit 1
 fi

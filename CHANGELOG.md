@@ -35,6 +35,6 @@ All notable changes to `creative-subagent-runner-mcp` are documented here.
 - Redact module strips `sk-...` / Bearer tokens from logs
 
 ### Known Limitations
-- Production deployment requires side-router port mapping (60.188.104.7:50255)
+- Production deployment requires side-router port mapping (https://mcp.your-domain.com)
 - Notion AI (consumer) does not support custom MCP servers yet — main dispatcher must call MCP, then write to Notion
 - Gemini 3.1 thinking model requires `maxOutputTokens >= 2000`

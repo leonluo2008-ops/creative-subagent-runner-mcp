@@ -49,36 +49,75 @@
 ### 准备
 
 - Node.js >= 20
+- Linux（任何主流发行版，systemd 是唯一依赖）
 - juxinapi 的两个 API Key（GPT 专用 / Gemini 专用，**不要混用**）
-- 公网可达的部署目标（本项目走旁路由方案）
+- 一个能跑 cloudflared 的账号（cloudflared 是推荐的公网暴露方案；不要 cloudflared 也可以走端口映射）
 
-### 安装
+### 安装（任何 Linux 机器都一样）
 
 ```bash
+# 1. clone 仓库（替换为你的 fork / 你的 git remote）
 git clone <repo> ~/Github/creative-subagent-runner-mcp
 cd ~/Github/creative-subagent-runner-mcp
 
-# 1. 装依赖
+# 2. 装依赖
 npm install
 
-# 2. 复制 .env 模板
+# 3. 复制 .env 模板,填 3 个 Key
 cp .env.example .env
-nano .env   # 填 3 个 Key: MCP_AUTH_TOKEN / OPENAI_API_KEY / GEMINI_API_KEY
+chmod 600 .env
+nano .env   # 必填: MCP_AUTH_TOKEN / OPENAI_API_KEY / GEMINI_API_KEY
+            # 可选: PORT (默认 3037), HOST (默认 0.0.0.0)
 
-# 3. 编译
+# 4. 编译
 npm run build
 
-# 4. 一键装 systemd
-sudo ./deploy/deploy.sh install
+# 5. 一键装 systemd (用户级 service,不需要 root)
+./deploy/deploy.sh install
 ```
 
-### 旁路由端口映射（你的环境）
+**自动适配**：unit 文件用 systemd 模板变量 (`%u` = 当前用户, `%h` = home 目录)，
+路径不需要改。 `deploy/creative-subagent-runner-mcp.service` 是用户级
+unit (不需要 root 权限)。
+
+### 公网暴露（推荐 Cloudflare Tunnel）
+
+1. 在 Cloudflare 控制台建一个 Tunnel，下载 JSON credentials 到
+   `~/.cloudflared/<TUNNEL_ID>.json`
+2. 修改 `~/.cloudflared/config.yml`:
+
+   ```yaml
+   tunnel: <your-tunnel-id>
+   credentials-file: /home/<your-user>/.cloudflared/<TUNNEL_ID>.json
+
+   ingress:
+     - hostname: mcp.your-domain.com
+       service: http://localhost:3037
+     - service: http_status:404
+   ```
+
+3. 启动: `cloudflared tunnel run <your-tunnel-id>`
+4. 把 `mcp.your-domain.com` 的 DNS CNAME 指到 `<tunnel-id>.cfargotunnel.com`
+
+**不需要修改任何项目代码**。cloudflared 是独立的 daemon。
+
+### 公网暴露（备选：旁路由 / 防火墙端口映射）
+
+如果你的服务器在 NAT 后面，可以让路由器做端口转发：
 
 ```
-WAN: 60.188.104.7:50255
-  ↓ 旁路由端口转发规则
-LAN: 192.168.101.9:3037 (本机 MCP server)
+WAN: <your-public-ip>:PORT
+  ↓ 路由器端口转发规则
+LAN: <lan-ip-of-server>:3037
 ```
+
+并在服务器本机放行对应端口：
+
+```bash
+sudo ufw allow <PORT>/tcp
+```
+
+**注意**：服务器本机必须 `chmod 600 .env`，systemd unit 用 `ProtectHome=read-only`。
 
 ### 验证
 
@@ -86,9 +125,9 @@ LAN: 192.168.101.9:3037 (本机 MCP server)
 # 本机
 ./deploy/deploy.sh verify
 
-# 外网（从另一台机器测）
-curl http://60.188.104.7:50255/healthz
-curl -X POST http://60.188.104.7:50255/mcp \
+# 外网
+curl https://mcp.your-domain.com/healthz
+curl -X POST https://mcp.your-domain.com/mcp \
   -H "Authorization: Bearer *** $MCP_TOKEN" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
@@ -104,6 +143,16 @@ curl -X POST http://60.188.104.7:50255/mcp \
 ./deploy/deploy.sh logs      # 最近 50 行日志
 ./deploy/deploy.sh verify    # 验证
 ./deploy/deploy.sh uninstall # 卸载（保留代码）
+```
+
+### 升级代码后
+
+```bash
+cd ~/Github/creative-subagent-runner-mcp
+git pull
+npm install
+npm run build
+./deploy/deploy.sh restart
 ```
 
 ## 安全
@@ -149,7 +198,7 @@ curl -X POST http://60.188.104.7:50255/mcp \
 {
   "mcpServers": {
     "creative-subagent-runner": {
-      "url": "http://60.188.104.7:50255/mcp",
+      "url": "http://<your-public-host>:PORT/mcp",
       "headers": {
         "Authorization": "Bearer <MCP_AUTH_TOKEN>"
       }
@@ -168,7 +217,7 @@ Notion AI 消费版目前不支持自定义 MCP Server。**方案**：
 
 ```bash
 # 调 list_subagent_roles
-curl -X POST http://60.188.104.7:50255/mcp \
+curl -X POST http://<your-public-host>:PORT/mcp \
   -H "Authorization: Bearer *** $MCP_TOKEN" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
@@ -181,7 +230,7 @@ curl -X POST http://60.188.104.7:50255/mcp \
 import urllib.request, json
 
 token = "YOUR_MCP_TOKEN"
-url = "http://60.188.104.7:50255/mcp"
+url = "http://<your-public-host>:PORT/mcp"
 
 req = urllib.request.Request(
     url,
