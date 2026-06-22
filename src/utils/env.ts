@@ -40,8 +40,11 @@ const envSchema = z.object({
 
   DEFAULT_GEMINI_MODEL: z.string().default("gemini-3.1-pro-preview"),
   WRITER_GEMINI_MODEL: z.string().default("gemini-3.1-pro-preview"),
-  STRUCTURE_AUDITOR_GEMINI_MODEL: z.string().default("gemini-3.1-pro-preview"),
-  STYLE_AUDITOR_GEMINI_MODEL: z.string().default("gemini-3.1-pro-preview"),
+  // 2026-06-22: audit 首选切到 3.5-flash, 备用 3.1-pro-preview (server 自动 fallback)
+  STRUCTURE_AUDITOR_GEMINI_MODEL: z.string().default("gemini-3.5-flash"),
+  STRUCTURE_AUDITOR_GEMINI_FALLBACK_MODEL: z.string().default("gemini-3.1-pro-preview"),
+  STYLE_AUDITOR_GEMINI_MODEL: z.string().default("gemini-3.5-flash"),
+  STYLE_AUDITOR_GEMINI_FALLBACK_MODEL: z.string().default("gemini-3.1-pro-preview"),
   REVISER_GEMINI_MODEL: z.string().default("gemini-3.1-pro-preview"),
 
   // ---- Provider 路由 ----

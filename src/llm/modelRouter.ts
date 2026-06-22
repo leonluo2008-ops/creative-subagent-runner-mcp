@@ -1,6 +1,7 @@
 // =====================================================================
 // modelRouter.ts — Provider / Model 路由
 // 强制: 生产环境不允许调用方覆盖角色路由
+// 2026-06-22: audit 角色加 fallback model (首选 3.5-flash → 备用 3.1-pro-preview)
 // =====================================================================
 import { env } from "../utils/env.js";
 import { safeError } from "../security/redact.js";
@@ -22,13 +23,13 @@ const ROLE_DEFAULT_ROUTES: Record<Role, RoleDefaultRoute> = {
   },
   structure_auditor: {
     provider: "gemini",
-    model: "gemini-3.1-pro-preview",
-    reason: "长上下文审查、结构一致性、伏笔和章间承接",
+    model: "gemini-3.5-flash",
+    reason: "长上下文审查、结构一致性、伏笔和章间承接 (2026-06-22 首选 3.5-flash, 备用 3.1-pro-preview)",
   },
   style_auditor: {
     provider: "gemini",
-    model: "gemini-3.1-pro-preview",
-    reason: "长上下文风格审查、反模式检查、目标读者适配",
+    model: "gemini-3.5-flash",
+    reason: "长上下文风格审查、反模式检查、目标读者适配 (2026-06-22 首选 3.5-flash, 备用 3.1-pro-preview)",
   },
   reviser: {
     provider: "openai",
@@ -102,6 +103,24 @@ export function getModelForRole(role: Role, provider: Provider): string {
     }
   }
   throw new Error(`Unsupported provider '${provider}' for role '${role}'`);
+}
+
+/**
+ * 获取角色的 fallback model (2026-06-22 新增)
+ * - 仅 audit 角色 (structure_auditor / style_auditor) 配置了 fallback
+ * - chapter_writer / reviser 没有 fallback (它们的 provider 是 openai, 实测不限流)
+ * - 返回 null 表示该角色没有 fallback
+ */
+export function getFallbackModelForRole(role: Role, provider: Provider): string | null {
+  if (provider !== "gemini") return null;
+  switch (role) {
+    case "structure_auditor":
+      return env.STRUCTURE_AUDITOR_GEMINI_FALLBACK_MODEL || null;
+    case "style_auditor":
+      return env.STYLE_AUDITOR_GEMINI_FALLBACK_MODEL || null;
+    default:
+      return null;
+  }
 }
 
 export interface ResolvedRoute {

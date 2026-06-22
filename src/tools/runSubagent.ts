@@ -4,7 +4,7 @@
 // =====================================================================
 import { env } from "../utils/env.js";
 import { safeError, safeLog } from "../security/redact.js";
-import { resolveRoute, type Role } from "../llm/modelRouter.js";
+import { resolveRoute, getFallbackModelForRole, type Role } from "../llm/modelRouter.js";
 import { callOpenAICompatible } from "../llm/openaiCompatibleClient.js";
 import { callGeminiNative } from "../llm/geminiNativeClient.js";
 import { getRoleDefinition } from "../roles/index.js";
@@ -198,49 +198,23 @@ export async function runSubagent(rawInput: unknown): Promise<RunSubagentResult>
     let content = "";
     let usage: RunSubagentResult["usage"] | undefined;
 
-    if (route.provider === "openai") {
-      const result = await callOpenAICompatible({
-        model: route.model,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        temperature,
-        max_tokens: maxTokens,
-        timeoutMs,
-      });
-      content = result.content;
-      usage = result.usage
-        ? {
-            prompt_tokens: result.usage.prompt_tokens,
-            completion_tokens: result.usage.completion_tokens,
-            total_tokens: result.usage.total_tokens,
-          }
-        : undefined;
-    } else if (route.provider === "gemini") {
-      const result = await callGeminiNative({
-        model: route.model,
-        systemPrompt,
-        userPrompt,
-        temperature,
-        maxOutputTokens: maxTokens,
-        timeoutMs,
-      });
-      content = result.content;
-      usage = result.usage
-        ? {
-            prompt_tokens: result.usage.prompt_token_count,
-            completion_tokens: result.usage.candidates_token_count,
-            total_tokens: result.usage.total_token_count,
-            thoughts_tokens: (result.usage as Record<string, number>).thoughts_token_count,
-          }
-        : undefined;
-    } else {
-      throw new Error(`Unsupported provider: ${route.provider}`);
-    }
+    // 调用 LLM (可能触发 fallback 重试)
+    let llmResult = await callLLMWithFallback(route, systemPrompt, userPrompt, {
+      temperature,
+      maxTokens,
+      timeoutMs,
+    });
+
+    content = llmResult.content;
+    usage = llmResult.usage;
 
     // 5. 根据角色处理输出
     const isAuditor = input.role === "structure_auditor" || input.role === "style_auditor";
+
+    // 实际用的 model (如果 fallback 了, 这里用 fallback model)
+    const actualModel = llmResult.usedFallback
+      ? getFallbackModelForRole(input.role, route.provider as "openai" | "gemini") ?? route.model
+      : route.model;
 
     if (isAuditor) {
       const report = tryExtractJson(content);
@@ -249,7 +223,7 @@ export async function runSubagent(rawInput: unknown): Promise<RunSubagentResult>
         role: input.role,
         task_id: input.task_id,
         provider: route.provider,
-        model: route.model,
+        model: actualModel,
         report: report ?? { raw: content, parse_error: "Could not extract JSON from model output" },
         usage,
         elapsed_ms: Date.now() - t0,
@@ -262,7 +236,7 @@ export async function runSubagent(rawInput: unknown): Promise<RunSubagentResult>
       role: input.role,
       task_id: input.task_id,
       provider: route.provider,
-      model: route.model,
+      model: actualModel,
       content,
       usage,
       elapsed_ms: Date.now() - t0,
@@ -281,4 +255,117 @@ export async function runSubagent(rawInput: unknown): Promise<RunSubagentResult>
       elapsed_ms: Date.now() - t0,
     };
   }
+}
+
+// =====================================================================
+// 2026-06-22 新增: LLM 调用 + 自动 fallback retry
+//
+// 流程:
+//   1. 用 route.model (首选) 调一次
+//   2. 若失败 (非 timeout) + 有 fallback model + fallback != preferred
+//      → 切 fallback 重试一次
+//   3. 仍失败 → 抛错给上层 (返回 model_error)
+//
+// 仅 audit 角色 (structure_auditor / style_auditor) 配置了 fallback.
+// chapter_writer / reviser 没有 fallback (provider=openai, 实测不限流).
+// =====================================================================
+async function callLLMWithFallback(
+  route: { role: Role; provider: string; model: string },
+  systemPrompt: string,
+  userPrompt: string,
+  opts: { temperature: number; maxTokens: number; timeoutMs: number }
+): Promise<{
+  content: string;
+  usage?: RunSubagentResult["usage"];
+  usedFallback: boolean;
+  fallbackReason?: string;
+}> {
+  // 第一次: 首选 model
+  try {
+    const result = await callLLMOnce(route.provider, route.model, systemPrompt, userPrompt, opts);
+    return { ...result, usedFallback: false };
+  } catch (firstErr) {
+    const firstMsg = firstErr instanceof Error ? firstErr.message : String(firstErr);
+    // Timeout 不触发 fallback (timeout 是网络问题, 切 model 没用)
+    if (firstMsg.includes("timed out")) {
+      throw firstErr;
+    }
+    // 检查是否有 fallback
+    const fallbackModel = getFallbackModelForRole(
+      route.role,
+      route.provider as "openai" | "gemini"
+    );
+    if (!fallbackModel || fallbackModel === route.model) {
+      throw firstErr; // 没 fallback 或 fallback 跟首选一样 → 直接抛
+    }
+    safeLog(
+      `[fallback] role=${route.role} primary=${route.model} failed: ${firstMsg.slice(0, 200)} → switching to fallback=${fallbackModel}`
+    );
+    // 重试 fallback
+    const result = await callLLMOnce(
+      route.provider,
+      fallbackModel,
+      systemPrompt,
+      userPrompt,
+      opts
+    );
+    return {
+      ...result,
+      usedFallback: true,
+      fallbackReason: `primary ${route.model} failed: ${firstMsg.slice(0, 200)}`,
+    };
+  }
+}
+
+async function callLLMOnce(
+  provider: string,
+  model: string,
+  systemPrompt: string,
+  userPrompt: string,
+  opts: { temperature: number; maxTokens: number; timeoutMs: number }
+): Promise<{ content: string; usage?: RunSubagentResult["usage"] }> {
+  if (provider === "openai") {
+    const result = await callOpenAICompatible({
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      temperature: opts.temperature,
+      max_tokens: opts.maxTokens,
+      timeoutMs: opts.timeoutMs,
+    });
+    return {
+      content: result.content,
+      usage: result.usage
+        ? {
+            prompt_tokens: result.usage.prompt_tokens,
+            completion_tokens: result.usage.completion_tokens,
+            total_tokens: result.usage.total_tokens,
+          }
+        : undefined,
+    };
+  }
+  if (provider === "gemini") {
+    const result = await callGeminiNative({
+      model,
+      systemPrompt,
+      userPrompt,
+      temperature: opts.temperature,
+      maxOutputTokens: opts.maxTokens,
+      timeoutMs: opts.timeoutMs,
+    });
+    return {
+      content: result.content,
+      usage: result.usage
+        ? {
+            prompt_tokens: result.usage.prompt_token_count,
+            completion_tokens: result.usage.candidates_token_count,
+            total_tokens: result.usage.total_token_count,
+            thoughts_tokens: (result.usage as Record<string, number>).thoughts_token_count,
+          }
+        : undefined,
+    };
+  }
+  throw new Error(`Unsupported provider: ${provider}`);
 }
