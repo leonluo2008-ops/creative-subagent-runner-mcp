@@ -1,22 +1,22 @@
 [Unit]
 Description=Creative Subagent Runner MCP Server (juxinapi GPT + Gemini)
-Documentation=file://%h/Github/creative-subagent-runner-mcp/README.md
+Documentation=file://%h/.hermes/skills/series-projects/mcp/creative-subagent-runner-mcp/README.md
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 # 不要 User= / Group= (用户 systemd 默认就是当前用户)
-WorkingDirectory=%h/Github/creative-subagent-runner-mcp
+WorkingDirectory=%h/.hermes/skills/series-projects/mcp/creative-subagent-runner-mcp
 
 Environment="NODE_ENV=production"
 # PORT / HOST 可选覆盖
 # Environment="PORT=3037"
 # Environment="HOST=0.0.0.0"
 
-EnvironmentFile=%h/Github/creative-subagent-runner-mcp/.env
+EnvironmentFile=%h/.hermes/skills/series-projects/mcp/creative-subagent-runner-mcp/.env
 
-ExecStart=/usr/bin/node %h/Github/creative-subagent-runner-mcp/dist/index.js
+ExecStart=/usr/bin/node %h/.hermes/skills/series-projects/mcp/creative-subagent-runner-mcp/dist/index.js
 
 Restart=on-failure
 RestartSec=5s
