@@ -1,13 +1,13 @@
 // =====================================================================
-// contentCleaner.ts — MCP 解析层剥 CoT (v2.0.3 · 2026-06-26)
+// contentCleaner.ts — MCP 解析层剥 CoT + 字数校验 (v2.0.4 · 2026-06-26)
 //
 // 设计原则 (用户铁律):
-//   - 不在 prompt 里禁 CoT (LLM 行为约束不靠谱, gemini 会换说法绕过)
-//   - 在 MCP 解析返回结果时剥 CoT (确定性, 可测试)
+//   - 不在 prompt 里禁 CoT / 字数约束 (LLM 行为约束不靠谱, gemini 会换说法绕过)
+//   - 在 MCP 解析返回结果时剥 CoT + 校验字数 (确定性, 可测试)
 //
 // 处理范围:
-//   - chapter_writer / reviser: 走 stripChainOfThought()
-//   - structure_auditor / style_auditor: 走 tryExtractJson(), 不剥
+//   - chapter_writer / reviser: 走 stripChainOfThought() + enforceWordCount()
+//   - structure_auditor / style_auditor: 走 tryExtractJson(), 不剥不校验字数
 //
 // =====================================================================
 
@@ -156,4 +156,114 @@ export function stripChainOfThought(content: string): StripResult {
 export function isCleanedUsable(result: StripResult): boolean {
   if (!result.hadCot) return true;
   return result.chineseRatio >= 0.5;
+}
+
+// =====================================================================
+// v2.0.4 新增: 字数校验
+//
+// word_count 字段是字符串 (仓里真实定义: output_contract.word_count: string)
+// 实际格式有 3 种:
+//   - "1300 字" / "约 1300 字" / "1300字" (单值)
+//   - "800-1500 字" / "800~1500 字" / "800 至 1500 字" (区间)
+//   - "1300" (裸数字)
+//
+// 解析失败 → 跳过校验 (返回 null, 调用方不强制)
+// =====================================================================
+
+/**
+ * 解析 word_count 字符串 → { min, max }
+ * 支持格式:
+ *   "1300" / "约 1300 字"        → { min: null, max: 1300 }  (只有上限)
+ *   "至少 800 字"                → { min: 800, max: null }    (只有下限)
+ *   "800-1500 字" / "800~1500 字" → { min: 800, max: 1500 }   (区间)
+ *
+ * 返回 null = 解析失败, 不强制校验
+ */
+export function parseWordCount(spec: string): { min: number | null; max: number | null } | null {
+  if (!spec || typeof spec !== "string") return null;
+  const trimmed = spec.trim();
+  if (!trimmed) return null;
+
+  // 1. 区间格式: "800-1500" / "800~1500" / "800 至 1500"
+  const rangeMatch = trimmed.match(/(\d{2,5})\s*[-~至到]\s*(\d{2,5})/);
+  if (rangeMatch) {
+    const a = parseInt(rangeMatch[1], 10);
+    const b = parseInt(rangeMatch[2], 10);
+    if (a > 0 && b > 0) {
+      return { min: Math.min(a, b), max: Math.max(a, b) };
+    }
+  }
+
+  // 2. 至少 N 字: "至少 800" / "不少于 800" / "≥ 800" / "min 800"
+  const minMatch = trimmed.match(/(?:至少|不少于|>=|≥|min[:\s]*)\s*(\d{2,5})/i);
+  if (minMatch) {
+    const n = parseInt(minMatch[1], 10);
+    if (n > 0) return { min: n, max: null };
+  }
+
+  // 3. 不超过 N 字: "不超过 1500" / "≤ 1500" / "max 1500" / "约 1300"
+  // 先去掉 "至少/不少于/≥/min" 前缀, 防止 800 被误判成 max
+  const stripped = trimmed
+    .replace(/(?:至少|不少于|>=|≥|min[:\s]*)/gi, "")
+    .trim();
+  const maxMatch = stripped.match(/(?:不超过|<=|≤|max[:\s]*|约|大概|大约|左右)?\s*(\d{2,5})/);
+  if (maxMatch) {
+    const n = parseInt(maxMatch[1], 10);
+    if (n > 0) return { min: null, max: n };
+  }
+
+  return null;
+}
+
+export interface WordCountCheckResult {
+  /** 字数是否在范围内 */
+  inRange: boolean;
+  /** 实际字数 (中文字符) */
+  actualCount: number;
+  /** 字数下限 */
+  min: number | null;
+  /** 字数上限 */
+  max: number | null;
+  /** 误差描述 (如 "低于 min 800 差 100" / "超 max 1500 差 150") */
+  diff?: string;
+}
+
+/**
+ * 校验字数
+ *
+ * 设计:
+ *   - 用中文字符数 (不是总字符数, 因为 markdown 标记/空白不影响阅读字数)
+ *   - 仅在剥 CoT 之后调用, 此时 cleaned 主要是中文正文
+ *
+ * @param content 已剥 CoT 的内容
+ * @param spec word_count 字符串 (如 "800-1500 字" / "约 1300")
+ * @returns 校验结果; spec 解析失败时 inRange=true (跳过校验)
+ */
+export function checkWordCount(content: string, spec: string): WordCountCheckResult {
+  const parsed = parseWordCount(spec);
+  if (!parsed) {
+    return { inRange: true, actualCount: countChineseChars(content), min: null, max: null };
+  }
+  const actual = countChineseChars(content);
+  const { min, max } = parsed;
+
+  if (min !== null && actual < min) {
+    return {
+      inRange: false,
+      actualCount: actual,
+      min,
+      max,
+      diff: `actual ${actual} < min ${min} (差 ${min - actual})`,
+    };
+  }
+  if (max !== null && actual > max) {
+    return {
+      inRange: false,
+      actualCount: actual,
+      min,
+      max,
+      diff: `actual ${actual} > max ${max} (超 ${actual - max})`,
+    };
+  }
+  return { inRange: true, actualCount: actual, min, max };
 }

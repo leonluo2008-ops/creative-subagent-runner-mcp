@@ -9,7 +9,7 @@ import { callOpenAICompatible } from "../llm/openaiCompatibleClient.js";
 import { callGeminiNative } from "../llm/geminiNativeClient.js";
 import { getRoleDefinition } from "../roles/index.js";
 import { validateRunSubagentInput } from "../schemas/runSubagentInput.js";
-import { stripChainOfThought, isCleanedUsable, type StripResult } from "../utils/contentCleaner.js";
+import { stripChainOfThought, isCleanedUsable, checkWordCount, type StripResult } from "../utils/contentCleaner.js";
 
 export interface RunSubagentResult {
   status: "ok" | "missing_context" | "input_too_large" | "invalid_input" | "provider_role_mismatch" | "timeout" | "model_error" | "unknown_role";
@@ -284,6 +284,65 @@ export async function runSubagent(rawInput: unknown): Promise<RunSubagentResult>
         );
       }
       content = stripResult.cleaned;
+    }
+
+    // 6. 字数校验 (v2.0.4 · 2026-06-26)
+    // 设计: 不在 prompt 强制字数 (LLM 不可靠), 在 MCP 解析返回前校验 + 重试
+    // 字段: output_contract.word_count (仓里真实存在, 字符串)
+    // 只对写手/修稿校验 (审计员不写章节)
+    if (isWriter && input.output_contract?.word_count) {
+      const spec = input.output_contract.word_count;
+      let wcResult = checkWordCount(content, spec);
+      let wcRetryCount = 0;
+      const MAX_WC_RETRIES = 2;
+
+      while (!wcResult.inRange && wcRetryCount < MAX_WC_RETRIES) {
+        wcRetryCount++;
+        safeLog(
+          `[word_count] role=${input.role} retry=${wcRetryCount} ` +
+          `actual=${wcResult.actualCount} ${wcResult.diff} ` +
+          `task_id=${input.task_id}`
+        );
+        const retryResult = await callLLMWithFallback(route, systemPrompt, userPrompt, {
+          temperature,
+          maxTokens,
+          timeoutMs,
+        });
+        content = retryResult.content;
+        usage = retryResult.usage;
+
+        // 重试后也要剥 CoT
+        const stripAfterRetry = stripChainOfThought(content);
+        if (isCleanedUsable(stripAfterRetry)) {
+          content = stripAfterRetry.cleaned;
+        }
+        wcResult = checkWordCount(content, spec);
+      }
+
+      // 2 次重试后仍超限 → 报 word_count_violation 错误
+      if (!wcResult.inRange) {
+        const errMsg =
+          `word_count_violation: 字数 ${wcResult.actualCount} 不在范围内 ` +
+          `(${spec} → min=${wcResult.min}, max=${wcResult.max}, ${wcResult.diff}), ` +
+          `重试 ${MAX_WC_RETRIES} 次仍超限`;
+        safeError("word_count_violation", new Error(errMsg));
+        return {
+          status: "model_error",
+          role: input.role,
+          task_id: input.task_id,
+          provider: route.provider,
+          model: actualModel,
+          error: { message: errMsg },
+          usage,
+          elapsed_ms: Date.now() - t0,
+        };
+      }
+
+      // 字数 OK
+      safeLog(
+        `[word_count] role=${input.role} actual=${wcResult.actualCount} ` +
+        `min=${wcResult.min} max=${wcResult.max} in_range task_id=${input.task_id}`
+      );
     }
 
     return {
