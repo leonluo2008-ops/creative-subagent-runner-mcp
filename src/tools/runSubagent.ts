@@ -9,6 +9,7 @@ import { callOpenAICompatible } from "../llm/openaiCompatibleClient.js";
 import { callGeminiNative } from "../llm/geminiNativeClient.js";
 import { getRoleDefinition } from "../roles/index.js";
 import { validateRunSubagentInput } from "../schemas/runSubagentInput.js";
+import { stripChainOfThought, isCleanedUsable, type StripResult } from "../utils/contentCleaner.js";
 
 export interface RunSubagentResult {
   status: "ok" | "missing_context" | "input_too_large" | "invalid_input" | "provider_role_mismatch" | "timeout" | "model_error" | "unknown_role";
@@ -210,6 +211,7 @@ export async function runSubagent(rawInput: unknown): Promise<RunSubagentResult>
 
     // 5. 根据角色处理输出
     const isAuditor = input.role === "structure_auditor" || input.role === "style_auditor";
+    const isWriter = input.role === "chapter_writer" || input.role === "reviser";
 
     // 实际用的 model (如果 fallback 了, 这里用 fallback model)
     const actualModel = llmResult.usedFallback
@@ -230,7 +232,60 @@ export async function runSubagent(rawInput: unknown): Promise<RunSubagentResult>
       };
     }
 
-    // 写手 / 修稿: 直接返回 content
+    // 写手 / 修稿: MCP 解析层剥 CoT (v2.0.3 · 2026-06-26)
+    // 设计: 不在 prompt 禁 CoT (LLM 不可靠, gemini 会换说法绕过),
+    //       在 MCP 返回前用确定性启发式剥掉 CoT, 留下中文正文.
+    if (isWriter) {
+      let stripResult = stripChainOfThought(content);
+      let retryCount = 0;
+      const MAX_COT_RETRIES = 2;
+
+      // 剥后中文比例 < 50% (剥不干净) → 重生成, 最多 2 次
+      while (!isCleanedUsable(stripResult) && retryCount < MAX_COT_RETRIES) {
+        retryCount++;
+        safeLog(
+          `[content_cleaner] role=${input.role} retry=${retryCount} ` +
+          `hadCot=${stripResult.hadCot} chineseRatio=${stripResult.chineseRatio.toFixed(2)} ` +
+          `task_id=${input.task_id}`
+        );
+        const retryResult = await callLLMWithFallback(route, systemPrompt, userPrompt, {
+          temperature,
+          maxTokens,
+          timeoutMs,
+        });
+        content = retryResult.content;
+        usage = retryResult.usage;
+        stripResult = stripChainOfThought(content);
+      }
+
+      // 2 次重试后仍不可用 → 报 cot_unremovable 错误
+      if (!isCleanedUsable(stripResult)) {
+        const errMsg =
+          `cot_unremovable: 中文比例 ${stripResult.chineseRatio.toFixed(2)} < 0.5, ` +
+          `重试 ${MAX_COT_RETRIES} 次仍含 CoT, stripped_lines=${stripResult.strippedLines}`;
+        safeError("cot_unremovable", new Error(errMsg + `, raw_first_200=${content.slice(0, 200)}`));
+        return {
+          status: "model_error",
+          role: input.role,
+          task_id: input.task_id,
+          provider: route.provider,
+          model: actualModel,
+          error: { message: errMsg },
+          usage,
+          elapsed_ms: Date.now() - t0,
+        };
+      }
+
+      // 可用: 用清理后的内容
+      if (stripResult.hadCot) {
+        safeLog(
+          `[content_cleaner] role=${input.role} stripped ${stripResult.strippedLines} CoT lines ` +
+          `(${stripResult.chineseRatio.toFixed(2)} Chinese ratio) task_id=${input.task_id}`
+        );
+      }
+      content = stripResult.cleaned;
+    }
+
     return {
       status: "ok",
       role: input.role,

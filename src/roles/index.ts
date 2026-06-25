@@ -38,13 +38,15 @@ const CHAPTER_WRITER: RoleDefinition = {
 如果缺少关键上下文，返回 missing_context，不得自行补设定。
 
 输出格式：
-- **直接输出章节正文**（中文为主，按 output_contract.language）。
-- **绝对不要输出任何思考/推理/计划过程**（不要写 "First, I..." / "Next, I..." / "Alright, let's..." / "I had to..." 这类 CoT 句子）。
-- **不要 JSON 包裹**。
-- **不要在开头写"以下是..."这种元描述**。
-- **不要写英文翻译/解释/标题**（除非要引用的英文专有名词）。
+- 直接输出章节正文（中文为主，按 output_contract.language）。
+- 不要 JSON 包裹。
+- 不要在开头写"以下是..."这种元描述。
 - 严格遵守 output_contract.word_count 上下浮动不超过 15%。
 - 严格遵守 output_contract.format（markdown / plain）。`,
+
+  // v2.0.3: 撤回 prompt 里的 CoT 禁令. MCP server 用确定性启发式在解析层剥 CoT.
+  // 详见 src/utils/contentCleaner.ts.
+
   requiredInputFields: [
     "project_context.l1_core",
     "project_context.l0_world",
@@ -175,10 +177,11 @@ const REVISER: RoleDefinition = {
 2. 空一行。
 3. 然后输出"## revision_notes"标题，下面用列表说明每条修改对应哪个 P0/P1。
 
-**绝对不要输出任何思考/推理/计划过程**（不要 "First, I..." / "Next, I..." / "Alright, let's..." 这类 CoT 句子）。
-
 不要只输出修改片段——必须输出完整新正文。
 不要在正文里写元描述（"以下是修订后..."）。`,
+
+  // v2.0.3: 同 chapter_writer, MCP 解析层剥 CoT, 不在 prompt 禁.
+
   requiredInputFields: [
     "chapter_context.existing_draft",
     "chapter_context.previous_audit",
