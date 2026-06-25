@@ -3,6 +3,7 @@
 // 不暴露任何 API Key 内容，只暴露脱敏后的状态
 // =====================================================================
 import { env } from "../utils/env.js";
+import { getModelForRole, type Role } from "../llm/modelRouter.js";
 
 export interface HealthCheckResult {
   status: "ok";
@@ -55,10 +56,10 @@ export async function healthCheck(): Promise<HealthCheckResult> {
       },
     },
     roles: [
-      { role: "chapter_writer", provider: env.WRITER_PROVIDER, model: env.WRITER_OPENAI_MODEL || env.DEFAULT_OPENAI_MODEL },
-      { role: "structure_auditor", provider: env.STRUCTURE_AUDITOR_PROVIDER, model: env.STRUCTURE_AUDITOR_GEMINI_MODEL || env.DEFAULT_GEMINI_MODEL },
-      { role: "style_auditor", provider: env.STYLE_AUDITOR_PROVIDER, model: env.STYLE_AUDITOR_GEMINI_MODEL || env.DEFAULT_GEMINI_MODEL },
-      { role: "reviser", provider: env.REVISER_PROVIDER, model: env.REVISER_OPENAI_MODEL || env.DEFAULT_OPENAI_MODEL },
+      { role: "chapter_writer", provider: env.WRITER_PROVIDER, model: getModelForRole("chapter_writer" as Role, env.WRITER_PROVIDER as any) },
+      { role: "structure_auditor", provider: env.STRUCTURE_AUDITOR_PROVIDER, model: getModelForRole("structure_auditor" as Role, env.STRUCTURE_AUDITOR_PROVIDER as any) },
+      { role: "style_auditor", provider: env.STYLE_AUDITOR_PROVIDER, model: getModelForRole("style_auditor" as Role, env.STYLE_AUDITOR_PROVIDER as any) },
+      { role: "reviser", provider: env.REVISER_PROVIDER, model: getModelForRole("reviser" as Role, env.REVISER_PROVIDER as any) },
     ],
     server: {
       node_env: env.NODE_ENV,

@@ -19,7 +19,7 @@ const ROLE_DEFAULT_ROUTES: Record<Role, RoleDefaultRoute> = {
   chapter_writer: {
     provider: "openai",
     model: "gpt-5.4-mini",
-    reason: "写正文、对白、中文叙事、风格化表达（实测选定：快、省、不限流）",
+    reason: "写正文、对白、中文叙事、风格化表达（v2.0.2 起可通过 WRITER_PROVIDER=gemini 切到 gemini-3.5-flash）",
   },
   structure_auditor: {
     provider: "gemini",
@@ -34,7 +34,7 @@ const ROLE_DEFAULT_ROUTES: Record<Role, RoleDefaultRoute> = {
   reviser: {
     provider: "openai",
     model: "gpt-5.4-mini",
-    reason: "根据审计报告修正文稿，保持中文表达质量（实测选定：快、省）",
+    reason: "根据审计报告修正文稿，保持中文表达质量（v2.0.2 起可通过 REVISER_PROVIDER=gemini 切到 gemini-3.5-flash）",
   },
 };
 
@@ -47,12 +47,14 @@ export function getRoleDefaultRoute(role: Role): RoleDefaultRoute {
     throw new Error(`Unknown role: ${role}`);
   }
 
-  // 根据 .env 中的 PROVIDER 偏好，复用默认 model
+  // 根据 .env 中的 PROVIDER 偏好，复用 env 中的 model (而非代码硬编码)
+  // v2.0.2 修复 (Bug #007 followup): provider override 必须同时调 getModelForRole()
+  // 否则 env 里的 *_GEMINI_MODEL 永远被忽略
   const providerOverride = getProviderOverrideFromEnv(role);
   if (providerOverride) {
     return {
       provider: providerOverride,
-      model: defaultRoute.model,
+      model: getModelForRole(role, providerOverride),
       reason: defaultRoute.reason + ` (env override: ${providerOverride})`,
     };
   }
