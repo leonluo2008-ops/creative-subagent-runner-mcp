@@ -49,3 +49,6 @@ CLOUD-HERMES-GUIDE.md
 notion-mcp-config.json
 CONTEXT-COMPRESSED.md
 diagnose-50255*.md
+
+# Local private runtime/deploy materials
+.local/
