@@ -24,17 +24,43 @@ import {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const projectRoot = path.resolve(__dirname, "../../");
+const defaultProjectRoot = path.resolve(__dirname, "../../");
 
-const CONFIG_DIR = path.join(projectRoot, "config");
-const ROLES_DIR = path.join(CONFIG_DIR, "roles");
-const PROMPTS_DIR = path.join(CONFIG_DIR, "prompts");
-const STATE_DIR = path.join(CONFIG_DIR, "state");
-const PROVIDERS_FILE = path.join(CONFIG_DIR, "providers.json");
-const RUNTIME_FILE = path.join(CONFIG_DIR, "runtime.json");
-const CURRENT_FILE = path.join(STATE_DIR, "current.json");
-const ACTIVE_SNAPSHOT_FILE = path.join(STATE_DIR, "active-snapshot.json");
-const ENV_FILE = path.join(projectRoot, ".env");
+interface ConfigStorePaths {
+  projectRoot: string;
+  configDir: string;
+  rolesDir: string;
+  promptsDir: string;
+  stateDir: string;
+  providersFile: string;
+  runtimeFile: string;
+  currentFile: string;
+  activeSnapshotFile: string;
+  envFile: string;
+}
+
+function buildConfigStorePaths(projectRoot = defaultProjectRoot): ConfigStorePaths {
+  const configDir = path.join(projectRoot, "config");
+  const stateDir = path.join(configDir, "state");
+
+  return {
+    projectRoot,
+    configDir,
+    rolesDir: path.join(configDir, "roles"),
+    promptsDir: path.join(configDir, "prompts"),
+    stateDir,
+    providersFile: path.join(configDir, "providers.json"),
+    runtimeFile: path.join(configDir, "runtime.json"),
+    currentFile: path.join(stateDir, "current.json"),
+    activeSnapshotFile: path.join(stateDir, "active-snapshot.json"),
+    envFile: path.join(projectRoot, ".env"),
+  };
+}
+
+const DEFAULT_PATHS = buildConfigStorePaths();
+const CONFIG_DIR = DEFAULT_PATHS.configDir;
+const CURRENT_FILE = DEFAULT_PATHS.currentFile;
+const ACTIVE_SNAPSHOT_FILE = DEFAULT_PATHS.activeSnapshotFile;
 
 async function exists(filePath: string): Promise<boolean> {
   try {
@@ -86,10 +112,10 @@ function upsertEnvContent(content: string, updates: Record<string, string>): str
   return `${nextLines.join("\n").replace(/\n+$/g, "")}\n`;
 }
 
-async function updateEnvFile(updates: Record<string, string>): Promise<void> {
-  const current = (await exists(ENV_FILE)) ? await fs.readFile(ENV_FILE, "utf8") : "";
+async function updateEnvFile(envFile: string, updates: Record<string, string>): Promise<void> {
+  const current = (await exists(envFile)) ? await fs.readFile(envFile, "utf8") : "";
   const next = upsertEnvContent(current, updates);
-  await atomicWriteFile(ENV_FILE, next);
+  await atomicWriteFile(envFile, next);
 }
 
 function uniqueStrings(values: string[]): string[] {
@@ -200,21 +226,21 @@ function validateDraftConfig(draft: DraftConfig): DraftConfig {
   };
 }
 
-async function loadDraftConfigFromDisk(): Promise<DraftConfig> {
-  const providersRaw = await readJsonFile<ProviderConfig[]>(PROVIDERS_FILE);
-  const runtimeRaw = runtimeConfigSchema.parse(await readJsonFile(RUNTIME_FILE));
-  const roleFiles = await fs.readdir(ROLES_DIR);
-  const promptFiles = await fs.readdir(PROMPTS_DIR);
+async function loadDraftConfigFromDisk(paths: ConfigStorePaths): Promise<DraftConfig> {
+  const providersRaw = await readJsonFile<ProviderConfig[]>(paths.providersFile);
+  const runtimeRaw = runtimeConfigSchema.parse(await readJsonFile(paths.runtimeFile));
+  const roleFiles = await fs.readdir(paths.rolesDir);
+  const promptFiles = await fs.readdir(paths.promptsDir);
 
   const roles: RoleConfig[] = [];
   for (const fileName of roleFiles.filter((name) => name.endsWith(".json"))) {
-    roles.push(await readJsonFile<RoleConfig>(path.join(ROLES_DIR, fileName)));
+    roles.push(await readJsonFile<RoleConfig>(path.join(paths.rolesDir, fileName)));
   }
 
   const prompts = {} as DraftConfig["prompts"];
   for (const fileName of promptFiles.filter((name) => name.endsWith(".md"))) {
     const role = fileName.replace(/\.md$/, "") as Role;
-    prompts[role] = await fs.readFile(path.join(PROMPTS_DIR, fileName), "utf8");
+    prompts[role] = await fs.readFile(path.join(paths.promptsDir, fileName), "utf8");
   }
 
   return validateDraftConfig({
@@ -225,30 +251,30 @@ async function loadDraftConfigFromDisk(): Promise<DraftConfig> {
   });
 }
 
-async function bootstrapDraftConfigIfMissing(): Promise<void> {
-  await ensureDir(CONFIG_DIR);
-  await ensureDir(ROLES_DIR);
-  await ensureDir(PROMPTS_DIR);
-  await ensureDir(STATE_DIR);
+async function bootstrapDraftConfigIfMissing(paths: ConfigStorePaths): Promise<void> {
+  await ensureDir(paths.configDir);
+  await ensureDir(paths.rolesDir);
+  await ensureDir(paths.promptsDir);
+  await ensureDir(paths.stateDir);
 
   const defaults = buildDefaultDraftConfig();
 
-  if (!(await exists(PROVIDERS_FILE))) {
-    await writeJsonFile(PROVIDERS_FILE, defaults.providers);
+  if (!(await exists(paths.providersFile))) {
+    await writeJsonFile(paths.providersFile, defaults.providers);
   }
-  if (!(await exists(RUNTIME_FILE))) {
-    await writeJsonFile(RUNTIME_FILE, defaults.runtime);
+  if (!(await exists(paths.runtimeFile))) {
+    await writeJsonFile(paths.runtimeFile, defaults.runtime);
   }
 
   for (const role of defaults.roles) {
-    const roleFile = path.join(ROLES_DIR, `${role.role}.json`);
+    const roleFile = path.join(paths.rolesDir, `${role.role}.json`);
     if (!(await exists(roleFile))) {
       await writeJsonFile(roleFile, role);
     }
   }
 
   for (const [role, prompt] of Object.entries(defaults.prompts)) {
-    const promptFile = path.join(PROMPTS_DIR, `${role}.md`);
+    const promptFile = path.join(paths.promptsDir, `${role}.md`);
     if (!(await exists(promptFile))) {
       await atomicWriteFile(promptFile, prompt);
     }
@@ -266,7 +292,7 @@ function buildSnapshot(draft: DraftConfig, version: string, activatedAt: string)
   });
 }
 
-async function persistActivatedSnapshot(snapshot: ActiveConfigSnapshot): Promise<void> {
+async function persistActivatedSnapshot(paths: ConfigStorePaths, snapshot: ActiveConfigSnapshot): Promise<void> {
   const currentState: CurrentState = currentStateSchema.parse({
     configVersion: snapshot.configVersion,
     activatedAt: snapshot.activatedAt,
@@ -276,25 +302,27 @@ async function persistActivatedSnapshot(snapshot: ActiveConfigSnapshot): Promise
     },
   });
 
-  await writeJsonFile(ACTIVE_SNAPSHOT_FILE, snapshot);
-  await writeJsonFile(CURRENT_FILE, currentState);
+  await writeJsonFile(paths.activeSnapshotFile, snapshot);
+  await writeJsonFile(paths.currentFile, currentState);
 }
 
 class ConfigStore {
   private activeSnapshot: ActiveConfigSnapshot | null = null;
 
-  async initialize(): Promise<void> {
-    await bootstrapDraftConfigIfMissing();
+  constructor(private readonly paths: ConfigStorePaths = DEFAULT_PATHS) {}
 
-    if (await exists(ACTIVE_SNAPSHOT_FILE)) {
-      const raw = await readJsonFile(ACTIVE_SNAPSHOT_FILE);
+  async initialize(): Promise<void> {
+    await bootstrapDraftConfigIfMissing(this.paths);
+
+    if (await exists(this.paths.activeSnapshotFile)) {
+      const raw = await readJsonFile(this.paths.activeSnapshotFile);
       this.activeSnapshot = activeSnapshotSchema.parse(raw);
       return;
     }
 
-    const draft = await loadDraftConfigFromDisk();
+    const draft = await loadDraftConfigFromDisk(this.paths);
     const snapshot = buildSnapshot(draft, generateConfigVersion(), new Date().toISOString());
-    await persistActivatedSnapshot(snapshot);
+    await persistActivatedSnapshot(this.paths, snapshot);
     this.activeSnapshot = snapshot;
   }
 
@@ -306,21 +334,21 @@ class ConfigStore {
   }
 
   async getDraftConfig(): Promise<DraftConfig> {
-    await bootstrapDraftConfigIfMissing();
-    return loadDraftConfigFromDisk();
+    await bootstrapDraftConfigIfMissing(this.paths);
+    return loadDraftConfigFromDisk(this.paths);
   }
 
   async applyDraftConfig(): Promise<ActiveConfigSnapshot> {
     const draft = await this.getDraftConfig();
     const snapshot = buildSnapshot(draft, generateConfigVersion(), new Date().toISOString());
-    await persistActivatedSnapshot(snapshot);
+    await persistActivatedSnapshot(this.paths, snapshot);
     this.activeSnapshot = snapshot;
     return snapshot;
   }
 
   async saveRuntime(runtime: DraftConfig["runtime"]): Promise<void> {
     const parsed = runtimeConfigSchema.parse(runtime);
-    await writeJsonFile(RUNTIME_FILE, parsed);
+    await writeJsonFile(this.paths.runtimeFile, parsed);
   }
 
   async saveProviders(providers: ProviderConfig[]): Promise<void> {
@@ -330,7 +358,7 @@ class ConfigStore {
         models: uniqueStrings(provider.models ?? []),
       }),
     );
-    await writeJsonFile(PROVIDERS_FILE, normalized);
+    await writeJsonFile(this.paths.providersFile, normalized);
   }
 
   getAdminProviderViews(draft: DraftConfig): AdminProviderView[] {
@@ -405,10 +433,10 @@ class ConfigStore {
     });
 
     if (Object.keys(envUpdates).length > 0) {
-      await updateEnvFile(envUpdates);
+      await updateEnvFile(this.paths.envFile, envUpdates);
     }
 
-    await writeJsonFile(PROVIDERS_FILE, normalized);
+    await writeJsonFile(this.paths.providersFile, normalized);
   }
 
   async deleteProvider(providerId: string): Promise<void> {
@@ -424,7 +452,7 @@ class ConfigStore {
     }
 
     await writeJsonFile(
-      PROVIDERS_FILE,
+      this.paths.providersFile,
       draft.providers.filter((provider) => provider.id !== providerId),
     );
   }
@@ -435,14 +463,14 @@ class ConfigStore {
       role,
       requiredInputFields: uniqueStrings(roleConfig.requiredInputFields ?? []),
     });
-    await writeJsonFile(path.join(ROLES_DIR, `${role}.json`), parsed);
+    await writeJsonFile(path.join(this.paths.rolesDir, `${role}.json`), parsed);
   }
 
   async savePrompt(role: Role, prompt: string): Promise<void> {
     if (!prompt.trim()) {
       throw new Error(`Prompt for role '${role}' cannot be empty.`);
     }
-    await atomicWriteFile(path.join(PROMPTS_DIR, `${role}.md`), prompt);
+    await atomicWriteFile(path.join(this.paths.promptsDir, `${role}.md`), prompt);
   }
 
   getProviderById(snapshot: ActiveConfigSnapshot, providerId: string): ProviderConfig {
@@ -463,4 +491,4 @@ class ConfigStore {
 }
 
 export const configStore = new ConfigStore();
-export { ACTIVE_SNAPSHOT_FILE, CONFIG_DIR, CURRENT_FILE };
+export { ACTIVE_SNAPSHOT_FILE, CONFIG_DIR, CURRENT_FILE, ConfigStore, buildConfigStorePaths };

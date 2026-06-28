@@ -4,14 +4,17 @@
 // =====================================================================
 import dotenv from "dotenv";
 import { z } from "zod";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// 优先加载项目根 .env（dist 运行时也能找到）
-const envPath = path.resolve(__dirname, "../../.env");
+// 优先使用当前工作目录下的 .env，兼容 dist-test；找不到再回退到源码相对路径。
+const cwdEnvPath = path.resolve(process.cwd(), ".env");
+const fallbackEnvPath = path.resolve(__dirname, "../../.env");
+const envPath = fs.existsSync(cwdEnvPath) ? cwdEnvPath : fallbackEnvPath;
 dotenv.config({ path: envPath });
 
 const envSchema = z.object({
