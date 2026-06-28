@@ -51,7 +51,7 @@ const ModelOptionsSchema = z.object({
 
 // ---- 顶层 schema ----
 export const RunSubagentInputSchema = z.object({
-  role: z.enum(["chapter_writer", "structure_auditor", "style_auditor", "reviser"]),
+  role: z.string().min(1),
   task_id: z.string().min(1),
   provider: z.enum(["openai", "gemini"]).optional(),
   model: z.string().optional(),

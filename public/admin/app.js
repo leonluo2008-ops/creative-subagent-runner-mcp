@@ -1,10 +1,8 @@
-const roleOrder = ["chapter_writer", "structure_auditor", "style_auditor", "reviser"];
-
 const state = {
   roles: [],
   providers: [],
   prompts: {},
-  currentPromptRole: "chapter_writer",
+  currentPromptRole: null,
   currentStatus: null,
   health: null,
   localDirty: {
@@ -32,6 +30,7 @@ const elements = {
 const actionButtonIds = [
   "refreshBtn",
   "addProviderBtn",
+  "addRoleBtn",
   "saveProvidersBtn",
   "saveRolesBtn",
   "savePromptBtn",
@@ -68,6 +67,11 @@ function formatTime(value) {
     dateStyle: "short",
     timeStyle: "short",
   }).format(new Date(value));
+}
+
+function getRoleDisplayName(roleId) {
+  const role = state.roles.find((item) => item.role === roleId);
+  return role?.displayName || roleId;
 }
 
 function hasLocalDirtyChanges() {
@@ -280,21 +284,32 @@ function renderRoles() {
         `<span class="badge">${escapeHtml(role.model)}</span>`,
         role.fallbackModel ? `<span class="badge warn">fallback ${escapeHtml(role.fallbackModel)}</span>` : `<span class="badge">无 fallback</span>`,
         `<span class="badge">${role.requiredInputFields.length} 个必填字段</span>`,
+        role.isSystem ? `<span class="badge">系统角色</span>` : `<span class="badge success">自定义角色</span>`,
         role.enabled ? `<span class="badge success">已启用</span>` : `<span class="badge error">已停用</span>`,
       ].join("");
+      const deleteButton = role.isSystem
+        ? `<button data-role-delete="${escapeHtml(role.role)}" disabled>系统角色不可删</button>`
+        : `<button data-role-delete="${escapeHtml(role.role)}">删除 Role</button>`;
 
       return `
         <details class="panel role-card" data-role-index="${index}" ${index === 0 ? "open" : ""}>
           <summary class="role-head">
             <div class="role-title">
-              <h3>${escapeHtml(role.role)}</h3>
+              <h3>${escapeHtml(role.displayName || role.role)}</h3>
+              <div>Role ID: ${escapeHtml(role.role)}</div>
               <div>${escapeHtml(role.description || "未填写描述")}</div>
               <div class="role-summary">${summaryBadges}</div>
+            </div>
+            <div class="button-row">
+              ${deleteButton}
             </div>
           </summary>
           <div class="role-editor">
             <div class="form-grid">
-              <label>Role
+              <label>显示名称
+                <input data-field="displayName" name="roleDisplayName-${index}" value="${escapeHtml(role.displayName || "")}" placeholder="例如：章节写手…" autocomplete="off">
+              </label>
+              <label>Role ID
                 <input data-field="role" name="roleName-${index}" value="${escapeHtml(role.role)}" disabled autocomplete="off">
               </label>
               <label>Description
@@ -340,11 +355,13 @@ function renderPromptMeta() {
   }
 
   const dirtyText = state.localDirty.prompt ? "当前 Prompt 有未保存修改。" : "当前 Prompt 已与草稿同步。";
-  elements.promptMeta.textContent = `当前角色：${state.currentPromptRole}。${dirtyText}`;
+  elements.promptMeta.textContent = `当前角色：${getRoleDisplayName(state.currentPromptRole)}（${state.currentPromptRole}）。${dirtyText}`;
 }
 
 function renderPromptTabs() {
-  const availableRoles = roleOrder.filter((role) => typeof state.prompts[role] === "string");
+  const availableRoles = state.roles
+    .map((role) => role.role)
+    .filter((roleId) => typeof state.prompts[roleId] === "string");
   if (!availableRoles.length) {
     elements.promptTabs.innerHTML = renderEmptyBlock("暂无 Prompt", "请先填写 Admin Token 并刷新，再加载 Prompt。");
     elements.promptEditor.value = "";
@@ -360,7 +377,7 @@ function renderPromptTabs() {
   elements.promptTabs.innerHTML = availableRoles
     .map(
       (role) =>
-        `<button data-role-tab="${role}" class="${state.currentPromptRole === role ? "primary" : ""}">${role}</button>`,
+        `<button data-role-tab="${role}" class="${state.currentPromptRole === role ? "primary" : ""}">${escapeHtml(getRoleDisplayName(role))}</button>`,
     )
     .join("");
   elements.promptEditor.value = state.prompts[state.currentPromptRole] || "";
@@ -383,6 +400,7 @@ function collectRoles() {
   const panels = [...elements.rolesList.querySelectorAll("[data-role-index]")];
   return panels.map((panel) => ({
     role: panel.querySelector('[data-field="role"]').value.trim(),
+    displayName: panel.querySelector('[data-field="displayName"]').value.trim(),
     description: panel.querySelector('[data-field="description"]').value.trim(),
     providerId: panel.querySelector('[data-field="providerId"]').value.trim(),
     model: panel.querySelector('[data-field="model"]').value.trim(),
@@ -394,14 +412,15 @@ function collectRoles() {
       .value.split("\n")
       .map((item) => item.trim())
       .filter(Boolean),
+    isSystem: state.roles[Number(panel.getAttribute("data-role-index"))]?.isSystem ?? false,
   }));
 }
 
 async function loadPrompts() {
   const prompts = {};
-  for (const role of roleOrder) {
-    const payload = await api(`/config/prompts/${role}`);
-    prompts[role] = payload.prompt;
+  for (const role of state.roles) {
+    const payload = await api(`/config/prompts/${encodeURIComponent(role.role)}`);
+    prompts[role.role] = payload.prompt;
   }
   state.prompts = prompts;
   state.localDirty.prompt = false;
@@ -466,7 +485,7 @@ async function saveProviders() {
 async function saveRoles() {
   const roles = collectRoles();
   for (const role of roles) {
-    await api(`/config/roles/${role.role}`, {
+    await api(`/config/roles/${encodeURIComponent(role.role)}`, {
       method: "PUT",
       body: JSON.stringify(role),
     });
@@ -479,19 +498,19 @@ async function saveRoles() {
 async function savePrompt() {
   const role = state.currentPromptRole;
   state.prompts[role] = elements.promptEditor.value;
-  await api(`/config/prompts/${role}`, {
+  await api(`/config/prompts/${encodeURIComponent(role)}`, {
     method: "PUT",
     body: JSON.stringify({ prompt: state.prompts[role] }),
   });
   state.localDirty.prompt = false;
   renderPromptMeta();
-  showToast(`${role} Prompt 已保存，尚未发布。`);
+  showToast(`${getRoleDisplayName(role)} Prompt 已保存，尚未发布。`);
   await refreshAll();
 }
 
 async function resetPrompt() {
   const role = state.currentPromptRole;
-  const payload = await api(`/config/prompts/${role}`);
+  const payload = await api(`/config/prompts/${encodeURIComponent(role)}`);
   state.prompts[role] = payload.prompt;
   elements.promptEditor.value = payload.prompt;
   state.localDirty.prompt = false;
@@ -522,6 +541,35 @@ function addProvider() {
   setGlobalStatus("新增了一个 Provider 草稿，请先保存。", "info");
 }
 
+async function addRole() {
+  const displayName = window.prompt("请输入角色显示名（支持中文）");
+  if (displayName === null) return;
+  const normalized = displayName.trim();
+  if (!normalized) {
+    showToast("角色显示名不能为空。", true);
+    return;
+  }
+
+  const provider = state.providers.find((item) => item.enabled) || state.providers[0];
+  if (!provider) {
+    showToast("请先至少配置一个 Provider，再新增角色。", true);
+    return;
+  }
+
+  await api("/config/roles", {
+    method: "POST",
+    body: JSON.stringify({
+      displayName: normalized,
+      providerId: provider.id,
+      model: provider.model,
+      outputType: "content",
+    }),
+  });
+
+  showToast(`已新增角色“${normalized}”，请继续完善描述与 Prompt。`);
+  await refreshAll();
+}
+
 async function deleteProvider(providerId) {
   const provider = state.providers.find((item) => item.id === providerId);
   if (!provider) return;
@@ -537,6 +585,25 @@ async function deleteProvider(providerId) {
   await api(`/config/providers/${encodeURIComponent(providerId)}`, { method: "DELETE" });
   state.localDirty.providers = false;
   showToast(`Provider ${providerId} 已删除，尚未发布。`);
+  await refreshAll();
+}
+
+async function deleteRole(roleId) {
+  const role = state.roles.find((item) => item.role === roleId);
+  if (!role) return;
+
+  if (role.isSystem) {
+    showToast(`系统角色 ${role.displayName || roleId} 不允许删除。`, true);
+    return;
+  }
+
+  const confirmed = window.confirm(`确认删除角色“${role.displayName || roleId}”吗？这会同时删除它的 Prompt 草稿。`);
+  if (!confirmed) return;
+
+  await api(`/config/roles/${encodeURIComponent(roleId)}`, { method: "DELETE" });
+  state.localDirty.roles = false;
+  state.localDirty.prompt = false;
+  showToast(`角色 ${role.displayName || roleId} 已删除，尚未发布。`);
   await refreshAll();
 }
 
@@ -571,6 +638,10 @@ document.getElementById("saveRolesBtn").addEventListener("click", () => {
   saveRoles().catch((error) => showToast(error.message, true));
 });
 
+document.getElementById("addRoleBtn").addEventListener("click", () => {
+  addRole().catch((error) => showToast(error.message, true));
+});
+
 document.getElementById("savePromptBtn").addEventListener("click", () => {
   savePrompt().catch((error) => showToast(error.message, true));
 });
@@ -601,6 +672,12 @@ elements.rolesList.addEventListener("input", () => {
   state.localDirty.roles = true;
   renderPublishMeta();
   setGlobalStatus("Role 表单有未保存变更。请先保存草稿。", "info");
+});
+
+elements.rolesList.addEventListener("click", (event) => {
+  const target = event.target.closest("[data-role-delete]");
+  if (!target) return;
+  deleteRole(target.getAttribute("data-role-delete")).catch((error) => showToast(error.message, true));
 });
 
 elements.promptTabs.addEventListener("click", (event) => {

@@ -6,11 +6,13 @@ import type { Role } from "../llm/modelRouter.js";
 import { buildDefaultDraftConfig } from "./defaultConfig.js";
 import {
   activeSnapshotSchema,
+  adminRoleCreateInputSchema,
   adminProviderInputSchema,
   currentStateSchema,
   providerConfigSchema,
   roleConfigSchema,
   runtimeConfigSchema,
+  roleIdSchema,
   type AdminCurrentStatus,
   type AdminProviderInput,
   type AdminProviderView,
@@ -122,6 +124,15 @@ function uniqueStrings(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));
 }
 
+function sortRoles(roles: RoleConfig[]): RoleConfig[] {
+  return [...roles].sort((left, right) => {
+    if (left.isSystem !== right.isSystem) {
+      return left.isSystem ? -1 : 1;
+    }
+    return left.role.localeCompare(right.role);
+  });
+}
+
 function collectRoleModelsForProvider(roles: RoleConfig[], providerId: string): string[] {
   const models: string[] = [];
   for (const role of roles) {
@@ -140,6 +151,36 @@ function collectRoleIdsForProvider(roles: RoleConfig[], providerId: string): str
 
 function sanitizeEnvKeySegment(value: string): string {
   return value.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "").toUpperCase();
+}
+
+function slugifyRoleId(displayName: string): string {
+  const ascii = displayName
+    .normalize("NFKD")
+    .replace(/[^\x00-\x7F]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return ascii || "role";
+}
+
+function createUniqueRoleId(displayName: string, existingIds: Set<string>): string {
+  const base = slugifyRoleId(displayName);
+
+  if (base !== "role" && !existingIds.has(base)) {
+    return base;
+  }
+
+  const fallbackBase = base === "role" ? `role-${randomUUID().slice(0, 8)}` : base;
+  if (!existingIds.has(fallbackBase)) {
+    return fallbackBase;
+  }
+
+  let suffix = 2;
+  while (existingIds.has(`${fallbackBase}-${suffix}`)) {
+    suffix += 1;
+  }
+  return `${fallbackBase}-${suffix}`;
 }
 
 function getSecretRefForProvider(providerId: string, adapter: ProviderConfig["adapter"]): string {
@@ -177,8 +218,9 @@ function buildComparableSnapshot(snapshot: ActiveConfigSnapshot) {
 
 function validateDraftConfig(draft: DraftConfig): DraftConfig {
   const providers = draft.providers.map((provider) => providerConfigSchema.parse(provider));
-  const roles = draft.roles.map((role) => roleConfigSchema.parse(role));
+  const roles = sortRoles(draft.roles.map((role) => roleConfigSchema.parse(role)));
   const runtime = runtimeConfigSchema.parse(draft.runtime);
+  const roleIds = new Set<string>();
 
   const providerMap = new Map(providers.map((provider) => [provider.id, provider]));
 
@@ -190,6 +232,10 @@ function validateDraftConfig(draft: DraftConfig): DraftConfig {
   }
 
   for (const role of roles) {
+    if (roleIds.has(role.role)) {
+      throw new Error(`Duplicate role '${role.role}' in draft config.`);
+    }
+    roleIds.add(role.role);
     const provider = providerMap.get(role.providerId);
     if (!provider) {
       throw new Error(`Role '${role.role}' references unknown provider '${role.providerId}'.`);
@@ -239,7 +285,7 @@ async function loadDraftConfigFromDisk(paths: ConfigStorePaths): Promise<DraftCo
 
   const prompts = {} as DraftConfig["prompts"];
   for (const fileName of promptFiles.filter((name) => name.endsWith(".md"))) {
-    const role = fileName.replace(/\.md$/, "") as Role;
+    const role = fileName.replace(/\.md$/, "");
     prompts[role] = await fs.readFile(path.join(paths.promptsDir, fileName), "utf8");
   }
 
@@ -304,6 +350,12 @@ async function persistActivatedSnapshot(paths: ConfigStorePaths, snapshot: Activ
 
   await writeJsonFile(paths.activeSnapshotFile, snapshot);
   await writeJsonFile(paths.currentFile, currentState);
+}
+
+async function deleteFileIfExists(filePath: string): Promise<void> {
+  if (await exists(filePath)) {
+    await fs.rm(filePath, { force: true });
+  }
 }
 
 class ConfigStore {
@@ -458,17 +510,86 @@ class ConfigStore {
   }
 
   async saveRole(role: Role, roleConfig: RoleConfig): Promise<void> {
+    const currentDraft = await this.getDraftConfig();
+    const existing = currentDraft.roles.find((item) => item.role === role);
+    if (!existing) {
+      throw new Error(`Role '${role}' does not exist.`);
+    }
+
     const parsed = roleConfigSchema.parse({
       ...roleConfig,
-      role,
+      role: existing.role,
+      isSystem: existing.isSystem,
       requiredInputFields: uniqueStrings(roleConfig.requiredInputFields ?? []),
     });
     await writeJsonFile(path.join(this.paths.rolesDir, `${role}.json`), parsed);
   }
 
+  async createRole(input: unknown): Promise<RoleConfig> {
+    const parsed = adminRoleCreateInputSchema.parse(input);
+    const draft = await this.getDraftConfig();
+    const existingIds = new Set(draft.roles.map((role) => role.role));
+    const requestedProvider = parsed.providerId?.trim();
+    if (requestedProvider && !draft.providers.some((item) => item.id === requestedProvider)) {
+      throw new Error(`Provider '${requestedProvider}' does not exist.`);
+    }
+    const roleId = roleIdSchema.parse(createUniqueRoleId(parsed.displayName, existingIds));
+    const provider =
+      (requestedProvider ? draft.providers.find((item) => item.id === requestedProvider) : null) ??
+      draft.providers.find((item) => item.enabled) ??
+      draft.providers[0];
+
+    if (!provider) {
+      throw new Error("Cannot create role without at least one provider.");
+    }
+
+    const nextRole = roleConfigSchema.parse({
+      role: roleId,
+      displayName: parsed.displayName.trim(),
+      description: parsed.description.trim() || `${parsed.displayName.trim()}（请完善描述）`,
+      providerId: provider.id,
+      model: parsed.model?.trim() || provider.defaultModel,
+      fallbackModel: provider.adapter === "gemini-native" ? (parsed.fallbackModel?.trim() || null) : null,
+      requiredInputFields: uniqueStrings(parsed.requiredInputFields ?? []),
+      outputType: parsed.outputType,
+      enabled: parsed.enabled,
+      isSystem: false,
+    });
+
+    const prompt = parsed.prompt.trim() || `你是${nextRole.displayName}。\n\n请在后台完善该角色的系统提示词。`;
+
+    await writeJsonFile(path.join(this.paths.rolesDir, `${roleId}.json`), nextRole);
+    await atomicWriteFile(path.join(this.paths.promptsDir, `${roleId}.md`), prompt);
+
+    return nextRole;
+  }
+
+  async deleteRole(role: Role): Promise<void> {
+    const draft = await this.getDraftConfig();
+    const existing = draft.roles.find((item) => item.role === role);
+    if (!existing) {
+      throw new Error(`Role '${role}' does not exist.`);
+    }
+    if (existing.isSystem) {
+      throw new Error(`System role '${role}' cannot be deleted.`);
+    }
+
+    const enabledCount = draft.roles.filter((item) => item.enabled).length;
+    if (existing.enabled && enabledCount <= 1) {
+      throw new Error("At least one enabled role must remain.");
+    }
+
+    await deleteFileIfExists(path.join(this.paths.rolesDir, `${role}.json`));
+    await deleteFileIfExists(path.join(this.paths.promptsDir, `${role}.md`));
+  }
+
   async savePrompt(role: Role, prompt: string): Promise<void> {
     if (!prompt.trim()) {
       throw new Error(`Prompt for role '${role}' cannot be empty.`);
+    }
+    const draft = await this.getDraftConfig();
+    if (!draft.roles.some((item) => item.role === role)) {
+      throw new Error(`Role '${role}' does not exist.`);
     }
     await atomicWriteFile(path.join(this.paths.promptsDir, `${role}.md`), prompt);
   }

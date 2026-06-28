@@ -58,9 +58,12 @@
     <section class="card">
       <div class="card-header">
         <h2>Roles</h2>
-        <button id="saveRolesBtn">保存全部 Roles</button>
+        <div class="button-row">
+          <button id="addRoleBtn">新增 Role</button>
+          <button id="saveRolesBtn">保存全部 Roles</button>
+        </div>
       </div>
-      <p>这里管理系统角色的路由关系。先看摘要，再按需展开编辑。</p>
+      <p>这里管理角色路由。系统角色不可删除；自定义角色支持中文显示名，内部会自动生成稳定的 ASCII Role ID。</p>
       <div id="rolesList" class="stack"></div>
     </section>
 

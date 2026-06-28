@@ -20,6 +20,8 @@ export interface HealthCheckResult {
   }>;
   roles: Array<{
     role: string;
+    display_name: string;
+    is_system: boolean;
     provider: string;
     model: string;
     fallback_model: string | null;
@@ -49,6 +51,8 @@ export async function healthCheck(): Promise<HealthCheckResult> {
     })),
     roles: snapshot.roles.map((role) => ({
       role: role.role,
+      display_name: role.displayName,
+      is_system: role.isSystem,
       provider: role.providerId,
       model: role.model,
       fallback_model: role.fallbackModel,

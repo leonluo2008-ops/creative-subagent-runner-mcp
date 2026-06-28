@@ -168,3 +168,60 @@ test("savePrompt leaves the original file untouched when atomic rename fails", {
     await fixture.cleanup();
   }
 });
+
+test("createRole adds a custom role with ASCII roleId and linked prompt", { concurrency: false }, async () => {
+  const fixture = await createStoreFixture();
+
+  try {
+    const created = await fixture.store.createRole({
+      displayName: "中文审稿助手",
+      outputType: "report",
+    });
+
+    assert.match(created.role, /^role-[a-z0-9-]+$/);
+    assert.equal(created.displayName, "中文审稿助手");
+    assert.equal(created.isSystem, false);
+    assert.equal(created.outputType, "report");
+
+    const draft = await fixture.store.getDraftConfig();
+    const stored = draft.roles.find((role) => role.role === created.role);
+    const prompt = await fs.readFile(path.join(fixture.paths.promptsDir, `${created.role}.md`), "utf8");
+
+    assert.ok(stored);
+    assert.equal(stored.displayName, "中文审稿助手");
+    assert.match(prompt, /你是中文审稿助手/);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("deleteRole rejects system roles and removes custom role files", { concurrency: false }, async () => {
+  const fixture = await createStoreFixture();
+
+  try {
+    await assert.rejects(
+      fixture.store.deleteRole("chapter_writer"),
+      /cannot be deleted/,
+    );
+
+    const created = await fixture.store.createRole({
+      displayName: "自定义角色",
+    });
+
+    await fixture.store.deleteRole(created.role);
+
+    const roleFileExists = await fs
+      .access(path.join(fixture.paths.rolesDir, `${created.role}.json`))
+      .then(() => true)
+      .catch(() => false);
+    const promptFileExists = await fs
+      .access(path.join(fixture.paths.promptsDir, `${created.role}.md`))
+      .then(() => true)
+      .catch(() => false);
+
+    assert.equal(roleFileExists, false);
+    assert.equal(promptFileExists, false);
+  } finally {
+    await fixture.cleanup();
+  }
+});

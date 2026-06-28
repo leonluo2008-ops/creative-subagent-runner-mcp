@@ -1,7 +1,7 @@
 import { safeError } from "../security/redact.js";
 import type { ActiveConfigSnapshot, ProviderConfig, RoleConfig } from "../store/types.js";
 
-export type Role = "chapter_writer" | "structure_auditor" | "style_auditor" | "reviser";
+export type Role = string;
 export type Provider = "openai" | "gemini";
 
 function adapterAlias(adapter: ProviderConfig["adapter"]): Provider {

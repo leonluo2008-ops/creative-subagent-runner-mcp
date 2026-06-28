@@ -9,6 +9,7 @@ import { configStore } from "../store/configStore.js";
 export interface ListRolesResult {
   roles: Array<{
     role: Role;
+    display_name: string;
     description: string;
     default_provider: string;
     default_provider_adapter: string;
@@ -26,6 +27,7 @@ export async function listSubagentRoles(): Promise<ListRolesResult> {
       const route = getRoleDefaultRoute(snapshot, def.role);
       return {
         role: def.role,
+        display_name: def.displayName,
         description: def.description,
         default_provider: route.providerId,
         default_provider_adapter: route.provider,

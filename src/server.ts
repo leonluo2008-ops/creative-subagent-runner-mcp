@@ -11,10 +11,10 @@ import { listSubagentRoles } from "./tools/listSubagentRoles.js";
 import { runSubagent } from "./tools/runSubagent.js";
 import { safeError } from "./security/redact.js";
 import { configStore } from "./store/configStore.js";
-import { adminProviderInputSchema } from "./store/types.js";
+import { adminProviderInputSchema, adminRoleCreateInputSchema, roleIdSchema } from "./store/types.js";
 
-type ToolRole = "chapter_writer" | "structure_auditor" | "style_auditor" | "reviser";
-const roleSchema = z.enum(["chapter_writer", "structure_auditor", "style_auditor", "reviser"]);
+type ToolRole = string;
+const roleSchema = roleIdSchema;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -196,9 +196,21 @@ async function createApp() {
     res.json({ roles: draft.roles });
   });
 
+  adminRouter.post("/config/roles", async (req, res) => {
+    const payload = adminRoleCreateInputSchema.parse(req.body);
+    const role = await configStore.createRole(payload);
+    res.json({ status: "ok", role });
+  });
+
   adminRouter.put("/config/roles/:roleId", async (req, res) => {
     const role = roleSchema.parse(req.params.roleId);
     await configStore.saveRole(role, req.body);
+    res.json({ status: "ok", role });
+  });
+
+  adminRouter.delete("/config/roles/:roleId", async (req, res) => {
+    const role = roleSchema.parse(req.params.roleId);
+    await configStore.deleteRole(role);
     res.json({ status: "ok", role });
   });
 

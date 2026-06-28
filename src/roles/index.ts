@@ -1,11 +1,13 @@
 // =====================================================================
 // roles/index.ts — 角色注册表
-// 集中管理所有 subagent 角色的 metadata + system prompt
+// 集中管理默认系统角色的 metadata + system prompt
 // =====================================================================
-import type { Role } from "../llm/modelRouter.js";
+
+export type BuiltinRole = "chapter_writer" | "structure_auditor" | "style_auditor" | "reviser";
 
 export interface DefaultRoleDefinition {
-  role: Role;
+  role: BuiltinRole;
+  displayName: string;
   description: string;
   systemPrompt: string;
   /** 必填字段（用于 missing_context 校验）*/
@@ -17,6 +19,7 @@ export interface DefaultRoleDefinition {
 // =====================================================================
 const CHAPTER_WRITER: DefaultRoleDefinition = {
   role: "chapter_writer",
+  displayName: "章节写手",
   description: "通用章节写手，根据项目上下文和章节 beats 写正文。",
   systemPrompt: `你是通用章节写手 agent。
 
@@ -63,6 +66,7 @@ const CHAPTER_WRITER: DefaultRoleDefinition = {
 // =====================================================================
 const STRUCTURE_AUDITOR: DefaultRoleDefinition = {
   role: "structure_auditor",
+  displayName: "结构审计员",
   description: "通用结构审计员，审计 L1/L0/L2/L3 一致性、章间承接和伏笔。",
   systemPrompt: `你是通用结构审计员 agent。
 
@@ -110,6 +114,7 @@ const STRUCTURE_AUDITOR: DefaultRoleDefinition = {
 // =====================================================================
 const STYLE_AUDITOR: DefaultRoleDefinition = {
   role: "style_auditor",
+  displayName: "风格审计员",
   description: "通用风格审计员，审计文风、反模式、项目禁区和目标读者适配。",
   systemPrompt: `你是通用风格审计员 agent。
 
@@ -155,6 +160,7 @@ const STYLE_AUDITOR: DefaultRoleDefinition = {
 // =====================================================================
 const REVISER: DefaultRoleDefinition = {
   role: "reviser",
+  displayName: "修稿助手",
   description: "通用修稿 agent，根据审计报告修正文稿。",
   systemPrompt: `你是通用修稿 agent。
 
@@ -191,14 +197,14 @@ const REVISER: DefaultRoleDefinition = {
 // =====================================================================
 // 注册表
 // =====================================================================
-export const DEFAULT_ROLE_DEFINITIONS: Record<Role, DefaultRoleDefinition> = {
+export const DEFAULT_ROLE_DEFINITIONS: Record<BuiltinRole, DefaultRoleDefinition> = {
   chapter_writer: CHAPTER_WRITER,
   structure_auditor: STRUCTURE_AUDITOR,
   style_auditor: STYLE_AUDITOR,
   reviser: REVISER,
 };
 
-export function getDefaultRoleDefinition(role: Role): DefaultRoleDefinition {
+export function getDefaultRoleDefinition(role: BuiltinRole): DefaultRoleDefinition {
   const def = DEFAULT_ROLE_DEFINITIONS[role];
   if (!def) throw new Error(`Unknown role: ${role}`);
   return def;

@@ -98,6 +98,7 @@ export function buildDefaultDraftConfig(): DraftConfig {
   const roleDefs = Object.values(DEFAULT_ROLE_DEFINITIONS);
   const roles = roleDefs.map((def) => ({
     role: def.role,
+    displayName: def.displayName,
     description: def.description,
     providerId: roleProviderId(def.role),
     model: roleModel(def.role),
@@ -105,6 +106,7 @@ export function buildDefaultDraftConfig(): DraftConfig {
     requiredInputFields: def.requiredInputFields,
     outputType: roleOutputType(def.role),
     enabled: true,
+    isSystem: true,
   }));
 
   const prompts = Object.fromEntries(

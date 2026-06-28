@@ -1,8 +1,13 @@
 import { z } from "zod";
-import type { Role } from "../llm/modelRouter.js";
 
 export const providerAdapterTypeSchema = z.enum(["openai-compatible", "gemini-native"]);
 export type ProviderAdapterType = z.infer<typeof providerAdapterTypeSchema>;
+
+export const roleIdSchema = z
+  .string()
+  .min(1)
+  .regex(/^[a-z0-9]+(?:[_-][a-z0-9]+)*$/, "roleId 只能包含小写字母、数字、下划线和中划线");
+export type RoleId = z.infer<typeof roleIdSchema>;
 
 export const providerConfigSchema = z.object({
   id: z.string().min(1),
@@ -55,7 +60,8 @@ export interface AdminCurrentStatus {
 }
 
 export const roleConfigSchema = z.object({
-  role: z.enum(["chapter_writer", "structure_auditor", "style_auditor", "reviser"]),
+  role: roleIdSchema,
+  displayName: z.string().min(1),
   description: z.string().min(1),
   providerId: z.string().min(1),
   model: z.string().min(1),
@@ -63,9 +69,24 @@ export const roleConfigSchema = z.object({
   requiredInputFields: z.array(z.string()).default([]),
   outputType: z.enum(["content", "report"]).default("content"),
   enabled: z.boolean().default(true),
+  isSystem: z.boolean().default(false),
 });
 
 export type RoleConfig = z.infer<typeof roleConfigSchema>;
+
+export const adminRoleCreateInputSchema = z.object({
+  displayName: z.string().min(1),
+  description: z.string().optional().default(""),
+  providerId: z.string().optional(),
+  model: z.string().optional(),
+  fallbackModel: z.string().nullable().optional().default(null),
+  requiredInputFields: z.array(z.string()).optional().default([]),
+  outputType: z.enum(["content", "report"]).optional().default("content"),
+  enabled: z.boolean().optional().default(true),
+  prompt: z.string().optional().default(""),
+});
+
+export type AdminRoleCreateInput = z.infer<typeof adminRoleCreateInputSchema>;
 
 export const runtimeConfigSchema = z.object({
   allowProviderOverride: z.boolean().default(false),
@@ -96,7 +117,7 @@ export const activeSnapshotSchema = z.object({
   runtime: runtimeConfigSchema,
   providers: z.array(providerConfigSchema),
   roles: z.array(roleConfigSchema),
-  prompts: z.record(z.enum(["chapter_writer", "structure_auditor", "style_auditor", "reviser"]), z.string()),
+  prompts: z.record(z.string(), z.string()),
 });
 
 export type ActiveConfigSnapshot = z.infer<typeof activeSnapshotSchema>;
@@ -105,7 +126,7 @@ export interface DraftConfig {
   runtime: RuntimeConfig;
   providers: ProviderConfig[];
   roles: RoleConfig[];
-  prompts: Record<Role, string>;
+  prompts: Record<string, string>;
 }
 
 export interface ProviderResolvedSecret {
