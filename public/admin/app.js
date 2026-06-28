@@ -21,6 +21,12 @@ const elements = {
   healthJson: document.getElementById("healthJson"),
   providersList: document.getElementById("providersList"),
   rolesList: document.getElementById("rolesList"),
+  roleCreatePanel: document.getElementById("roleCreatePanel"),
+  newRoleDisplayName: document.getElementById("newRoleDisplayName"),
+  newRoleProviderId: document.getElementById("newRoleProviderId"),
+  newRoleModel: document.getElementById("newRoleModel"),
+  newRoleOutputType: document.getElementById("newRoleOutputType"),
+  newRoleDescription: document.getElementById("newRoleDescription"),
   promptMeta: document.getElementById("promptMeta"),
   promptTabs: document.getElementById("promptTabs"),
   promptEditor: document.getElementById("promptEditor"),
@@ -31,6 +37,8 @@ const actionButtonIds = [
   "refreshBtn",
   "addProviderBtn",
   "addRoleBtn",
+  "createRoleSubmitBtn",
+  "createRoleCancelBtn",
   "saveProvidersBtn",
   "saveRolesBtn",
   "savePromptBtn",
@@ -72,6 +80,55 @@ function formatTime(value) {
 function getRoleDisplayName(roleId) {
   const role = state.roles.find((item) => item.role === roleId);
   return role?.displayName || roleId;
+}
+
+function resetRoleCreateForm() {
+  elements.newRoleDisplayName.value = "";
+  elements.newRoleDescription.value = "";
+  elements.newRoleOutputType.value = "content";
+  syncRoleCreateProviderOptions();
+}
+
+function openRoleCreatePanel() {
+  syncRoleCreateProviderOptions();
+  elements.roleCreatePanel.classList.remove("hidden");
+  elements.newRoleDisplayName.focus();
+  setGlobalStatus("请填写新角色的最少信息，创建后再补描述与 Prompt。", "info");
+}
+
+function closeRoleCreatePanel() {
+  elements.roleCreatePanel.classList.add("hidden");
+  resetRoleCreateForm();
+}
+
+function syncRoleCreateProviderOptions() {
+  const previous = elements.newRoleProviderId.value;
+  const options = state.providers.map(
+    (provider) =>
+      `<option value="${escapeHtml(provider.id)}" ${provider.enabled ? "" : ""}>${escapeHtml(provider.id)}${provider.enabled ? "" : "（已停用）"}</option>`,
+  );
+
+  elements.newRoleProviderId.innerHTML = options.join("");
+  if (!state.providers.length) {
+    elements.newRoleModel.value = "";
+    return;
+  }
+
+  const nextProviderId = state.providers.some((provider) => provider.id === previous)
+    ? previous
+    : (state.providers.find((provider) => provider.enabled) || state.providers[0]).id;
+  elements.newRoleProviderId.value = nextProviderId;
+
+  const provider = state.providers.find((item) => item.id === nextProviderId);
+  if (provider && !elements.newRoleModel.value.trim()) {
+    elements.newRoleModel.value = provider.model || "";
+  }
+}
+
+function handleRoleCreateProviderChange() {
+  const provider = state.providers.find((item) => item.id === elements.newRoleProviderId.value);
+  if (!provider) return;
+  elements.newRoleModel.value = provider.model || "";
 }
 
 function hasLocalDirtyChanges() {
@@ -347,6 +404,17 @@ function renderRoles() {
     .join("");
 }
 
+function renderRoleCreatePanel() {
+  if (!state.providers.length) {
+    closeRoleCreatePanel();
+    document.getElementById("addRoleBtn").disabled = true;
+    return;
+  }
+
+  document.getElementById("addRoleBtn").disabled = false;
+  syncRoleCreateProviderOptions();
+}
+
 function renderPromptMeta() {
   const promptValue = state.prompts[state.currentPromptRole];
   if (typeof promptValue !== "string") {
@@ -456,6 +524,7 @@ async function refreshAll() {
   renderDashboard();
   renderProviders();
   renderRoles();
+  renderRoleCreatePanel();
   await loadPrompts();
 
   state.loading = false;
@@ -542,15 +611,16 @@ function addProvider() {
 }
 
 async function addRole() {
-  const displayName = window.prompt("请输入角色显示名（支持中文）");
-  if (displayName === null) return;
-  const normalized = displayName.trim();
+  const normalized = elements.newRoleDisplayName.value.trim();
   if (!normalized) {
     showToast("角色显示名不能为空。", true);
+    elements.newRoleDisplayName.focus();
     return;
   }
 
-  const provider = state.providers.find((item) => item.enabled) || state.providers[0];
+  const provider = state.providers.find((item) => item.id === elements.newRoleProviderId.value)
+    || state.providers.find((item) => item.enabled)
+    || state.providers[0];
   if (!provider) {
     showToast("请先至少配置一个 Provider，再新增角色。", true);
     return;
@@ -560,12 +630,14 @@ async function addRole() {
     method: "POST",
     body: JSON.stringify({
       displayName: normalized,
+      description: elements.newRoleDescription.value.trim(),
       providerId: provider.id,
-      model: provider.model,
-      outputType: "content",
+      model: elements.newRoleModel.value.trim() || provider.model,
+      outputType: elements.newRoleOutputType.value,
     }),
   });
 
+  closeRoleCreatePanel();
   showToast(`已新增角色“${normalized}”，请继续完善描述与 Prompt。`);
   await refreshAll();
 }
@@ -639,7 +711,24 @@ document.getElementById("saveRolesBtn").addEventListener("click", () => {
 });
 
 document.getElementById("addRoleBtn").addEventListener("click", () => {
+  if (!state.providers.length) {
+    showToast("请先至少配置一个 Provider，再新增角色。", true);
+    return;
+  }
+
+  if (elements.roleCreatePanel.classList.contains("hidden")) {
+    openRoleCreatePanel();
+  } else {
+    closeRoleCreatePanel();
+  }
+});
+
+document.getElementById("createRoleSubmitBtn").addEventListener("click", () => {
   addRole().catch((error) => showToast(error.message, true));
+});
+
+document.getElementById("createRoleCancelBtn").addEventListener("click", () => {
+  closeRoleCreatePanel();
 });
 
 document.getElementById("savePromptBtn").addEventListener("click", () => {
@@ -679,6 +768,8 @@ elements.rolesList.addEventListener("click", (event) => {
   if (!target) return;
   deleteRole(target.getAttribute("data-role-delete")).catch((error) => showToast(error.message, true));
 });
+
+elements.newRoleProviderId.addEventListener("change", handleRoleCreateProviderChange);
 
 elements.promptTabs.addEventListener("click", (event) => {
   const button = event.target.closest("[data-role-tab]");

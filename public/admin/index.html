@@ -64,6 +64,38 @@
         </div>
       </div>
       <p>这里管理角色路由。系统角色不可删除；自定义角色支持中文显示名，内部会自动生成稳定的 ASCII Role ID。</p>
+      <section id="roleCreatePanel" class="panel role-create-panel hidden">
+        <div class="role-create-head">
+          <div>
+            <strong>新建自定义角色</strong>
+            <div class="subtle-meta">只填写最少信息；保存后系统会自动生成 Role ID，并创建对应 Prompt 草稿。</div>
+          </div>
+          <div class="button-row">
+            <button id="createRoleSubmitBtn" class="primary">创建角色</button>
+            <button id="createRoleCancelBtn" type="button">取消</button>
+          </div>
+        </div>
+        <div class="form-grid">
+          <label>显示名称
+            <input id="newRoleDisplayName" name="newRoleDisplayName" placeholder="例如：中文审稿助手…" autocomplete="off">
+          </label>
+          <label>Provider
+            <select id="newRoleProviderId" name="newRoleProviderId" autocomplete="off"></select>
+          </label>
+          <label>主模型
+            <input id="newRoleModel" name="newRoleModel" placeholder="默认跟随所选 Provider…" autocomplete="off">
+          </label>
+          <label>输出类型
+            <select id="newRoleOutputType" name="newRoleOutputType" autocomplete="off">
+              <option value="content">content</option>
+              <option value="report">report</option>
+            </select>
+          </label>
+          <label class="span-2">描述
+            <input id="newRoleDescription" name="newRoleDescription" placeholder="例如：负责特定文稿审查或扩写…" autocomplete="off">
+          </label>
+        </div>
+      </section>
       <div id="rolesList" class="stack"></div>
     </section>
 

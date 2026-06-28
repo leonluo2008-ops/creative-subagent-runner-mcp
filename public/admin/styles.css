@@ -288,6 +288,22 @@ summary:focus-visible {
   gap: 12px;
 }
 
+.role-create-panel {
+  margin-bottom: 12px;
+}
+
+.role-create-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.span-2 {
+  grid-column: span 2;
+}
+
 .provider-head,
 .role-head {
   display: flex;
@@ -353,7 +369,8 @@ summary:focus-visible {
 
   .publish-bar,
   .provider-head,
-  .role-head {
+  .role-head,
+  .role-create-head {
     flex-direction: column;
     align-items: stretch;
   }
@@ -361,5 +378,9 @@ summary:focus-visible {
   .form-grid,
   .meta-grid {
     grid-template-columns: 1fr;
+  }
+
+  .span-2 {
+    grid-column: span 1;
   }
 }
