@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { Role } from "../llm/modelRouter.js";
+import { DEFAULT_ROLE_DEFINITIONS, type BuiltinRole } from "../roles/index.js";
 import { buildDefaultDraftConfig } from "./defaultConfig.js";
 import {
   activeSnapshotSchema,
@@ -183,6 +184,21 @@ function createUniqueRoleId(displayName: string, existingIds: Set<string>): stri
   return `${fallbackBase}-${suffix}`;
 }
 
+function getBuiltinRoleDefinition(role: string) {
+  return DEFAULT_ROLE_DEFINITIONS[role as BuiltinRole];
+}
+
+function normalizeRoleConfig(role: Partial<RoleConfig> & { role: string }): RoleConfig {
+  const builtin = getBuiltinRoleDefinition(role.role);
+  return roleConfigSchema.parse({
+    ...role,
+    displayName: role.displayName ?? builtin?.displayName ?? role.role,
+    description: role.description ?? builtin?.description ?? role.role,
+    isSystem: role.isSystem ?? Boolean(builtin),
+    requiredInputFields: uniqueStrings(role.requiredInputFields ?? builtin?.requiredInputFields ?? []),
+  });
+}
+
 function getSecretRefForProvider(providerId: string, adapter: ProviderConfig["adapter"]): string {
   if (providerId === "openai-default") return "OPENAI_API_KEY";
   if (providerId === "gemini-default") return "GEMINI_API_KEY";
@@ -218,7 +234,7 @@ function buildComparableSnapshot(snapshot: ActiveConfigSnapshot) {
 
 function validateDraftConfig(draft: DraftConfig): DraftConfig {
   const providers = draft.providers.map((provider) => providerConfigSchema.parse(provider));
-  const roles = sortRoles(draft.roles.map((role) => roleConfigSchema.parse(role)));
+  const roles = sortRoles(draft.roles.map((role) => normalizeRoleConfig(role)));
   const runtime = runtimeConfigSchema.parse(draft.runtime);
   const roleIds = new Set<string>();
 
@@ -333,7 +349,7 @@ function buildSnapshot(draft: DraftConfig, version: string, activatedAt: string)
     activatedAt,
     runtime: draft.runtime,
     providers: draft.providers,
-    roles: draft.roles,
+    roles: draft.roles.map((role) => normalizeRoleConfig(role)),
     prompts: draft.prompts,
   });
 }
@@ -367,8 +383,12 @@ class ConfigStore {
     await bootstrapDraftConfigIfMissing(this.paths);
 
     if (await exists(this.paths.activeSnapshotFile)) {
-      const raw = await readJsonFile(this.paths.activeSnapshotFile);
-      this.activeSnapshot = activeSnapshotSchema.parse(raw);
+      const raw = (await readJsonFile(this.paths.activeSnapshotFile)) as Record<string, unknown>;
+      const rawRoles = Array.isArray(raw.roles) ? raw.roles : [];
+      this.activeSnapshot = activeSnapshotSchema.parse({
+        ...raw,
+        roles: rawRoles.map((role) => normalizeRoleConfig(role as Partial<RoleConfig> & { role: string })),
+      });
       return;
     }
 
