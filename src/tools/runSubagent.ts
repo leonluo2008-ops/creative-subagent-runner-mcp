@@ -2,19 +2,20 @@
 // tools/runSubagent.ts — 核心：调 LLM 跑子 agent
 // 流程: validate → resolveRoute → call LLM → normalize → return
 // =====================================================================
-import { env } from "../utils/env.js";
 import { safeError, safeLog } from "../security/redact.js";
 import { resolveRoute, getFallbackModelForRole, type Role } from "../llm/modelRouter.js";
 import { callOpenAICompatible } from "../llm/openaiCompatibleClient.js";
 import { callGeminiNative } from "../llm/geminiNativeClient.js";
-import { getRoleDefinition } from "../roles/index.js";
 import { validateRunSubagentInput } from "../schemas/runSubagentInput.js";
-import { stripChainOfThought, isCleanedUsable, checkWordCount, type StripResult } from "../utils/contentCleaner.js";
+import { stripChainOfThought, isCleanedUsable, checkWordCount } from "../utils/contentCleaner.js";
+import { configStore } from "../store/configStore.js";
+import type { ActiveConfigSnapshot, ProviderConfig } from "../store/types.js";
 
 export interface RunSubagentResult {
   status: "ok" | "missing_context" | "input_too_large" | "invalid_input" | "provider_role_mismatch" | "timeout" | "model_error" | "unknown_role";
   role: Role;
   task_id: string;
+  config_version?: string;
   provider?: string;
   model?: string;
   content?: string;        // 写手 / 修稿 的正文
@@ -142,16 +143,20 @@ function tryExtractJson(text: string): object | null {
 /**
  * 主入口
  */
-export async function runSubagent(rawInput: unknown): Promise<RunSubagentResult> {
+export async function runSubagent(
+  rawInput: unknown,
+  snapshot: ActiveConfigSnapshot = configStore.getActiveSnapshot(),
+): Promise<RunSubagentResult> {
   const t0 = Date.now();
 
   // 1. 校验输入
-  const validation = validateRunSubagentInput(rawInput);
+  const validation = validateRunSubagentInput(rawInput, snapshot);
   if (!validation.ok) {
     return {
       status: validation.status,
       role: (rawInput as { role?: Role })?.role ?? "chapter_writer",
       task_id: (rawInput as { task_id?: string })?.task_id ?? "unknown",
+      config_version: snapshot.configVersion,
       error: {
         missing: validation.missing,
         message: validation.message,
@@ -161,16 +166,29 @@ export async function runSubagent(rawInput: unknown): Promise<RunSubagentResult>
   }
 
   const input = validation.data;
-  const roleDef = getRoleDefinition(input.role);
+  const roleDef = snapshot.roles.find((role) => role.role === input.role);
+  if (!roleDef) {
+    return {
+      status: "unknown_role",
+      role: input.role,
+      task_id: input.task_id,
+      config_version: snapshot.configVersion,
+      error: {
+        message: `Role '${input.role}' not found in active config.`,
+      },
+      elapsed_ms: Date.now() - t0,
+    };
+  }
 
   // 2. 解析路由（含 provider_role_mismatch 校验）
-  const routeResult = resolveRoute(input.role, input.provider, input.model);
+  const routeResult = resolveRoute(snapshot, input.role, input.provider, input.model);
   if (!routeResult.ok) {
     safeError("route_mismatch", new Error(routeResult.error.message));
     return {
       status: "provider_role_mismatch",
       role: input.role,
       task_id: input.task_id,
+      config_version: snapshot.configVersion,
       error: {
         message: routeResult.error.message,
         requested_provider: routeResult.error.requestedProvider,
@@ -183,24 +201,52 @@ export async function runSubagent(rawInput: unknown): Promise<RunSubagentResult>
   }
 
   const route = routeResult.route;
-  safeLog(`[run_subagent] role=${route.role} provider=${route.provider} model=${route.model} task_id=${input.task_id}`);
+  const providerConfig = snapshot.providers.find((provider) => provider.id === route.providerId);
+  if (!providerConfig) {
+    return {
+      status: "provider_role_mismatch",
+      role: input.role,
+      task_id: input.task_id,
+      config_version: snapshot.configVersion,
+      error: {
+        message: `Provider '${route.providerId}' not found in active config.`,
+      },
+      elapsed_ms: Date.now() - t0,
+    };
+  }
+
+  safeLog(
+    `[run_subagent] role=${route.role} provider=${route.providerId}/${route.provider} model=${route.model} task_id=${input.task_id} config=${snapshot.configVersion}`,
+  );
 
   // 3. 构造 prompt
-  const systemPrompt = roleDef.systemPrompt;
+  const systemPrompt = snapshot.prompts[input.role];
+  if (!systemPrompt) {
+    return {
+      status: "model_error",
+      role: input.role,
+      task_id: input.task_id,
+      config_version: snapshot.configVersion,
+      error: {
+        message: `Prompt for role '${input.role}' is missing in active config.`,
+      },
+      elapsed_ms: Date.now() - t0,
+    };
+  }
   const userPrompt = buildUserPrompt(input);
 
   // 4. 调 LLM
   const modelOptions = input.model_options ?? {};
-  const temperature = modelOptions.temperature ?? env.DEFAULT_TEMPERATURE;
-  const maxTokens = modelOptions.max_tokens ?? env.DEFAULT_MAX_TOKENS;
-  const timeoutMs = modelOptions.timeout_ms ?? env.DEFAULT_TIMEOUT_MS;
+  const temperature = modelOptions.temperature ?? snapshot.runtime.defaultTemperature;
+  const maxTokens = modelOptions.max_tokens ?? snapshot.runtime.defaultMaxTokens;
+  const timeoutMs = modelOptions.timeout_ms ?? snapshot.runtime.defaultTimeoutMs;
 
   try {
     let content = "";
     let usage: RunSubagentResult["usage"] | undefined;
 
     // 调用 LLM (可能触发 fallback 重试)
-    let llmResult = await callLLMWithFallback(route, systemPrompt, userPrompt, {
+    let llmResult = await callLLMWithFallback(snapshot, providerConfig, route, systemPrompt, userPrompt, {
       temperature,
       maxTokens,
       timeoutMs,
@@ -215,7 +261,7 @@ export async function runSubagent(rawInput: unknown): Promise<RunSubagentResult>
 
     // 实际用的 model (如果 fallback 了, 这里用 fallback model)
     const actualModel = llmResult.usedFallback
-      ? getFallbackModelForRole(input.role, route.provider as "openai" | "gemini") ?? route.model
+      ? getFallbackModelForRole(snapshot, input.role) ?? route.model
       : route.model;
 
     if (isAuditor) {
@@ -224,7 +270,8 @@ export async function runSubagent(rawInput: unknown): Promise<RunSubagentResult>
         status: "ok",
         role: input.role,
         task_id: input.task_id,
-        provider: route.provider,
+        config_version: snapshot.configVersion,
+        provider: route.providerId,
         model: actualModel,
         report: report ?? { raw: content, parse_error: "Could not extract JSON from model output" },
         usage,
@@ -248,7 +295,7 @@ export async function runSubagent(rawInput: unknown): Promise<RunSubagentResult>
           `hadCot=${stripResult.hadCot} chineseRatio=${stripResult.chineseRatio.toFixed(2)} ` +
           `task_id=${input.task_id}`
         );
-        const retryResult = await callLLMWithFallback(route, systemPrompt, userPrompt, {
+        const retryResult = await callLLMWithFallback(snapshot, providerConfig, route, systemPrompt, userPrompt, {
           temperature,
           maxTokens,
           timeoutMs,
@@ -268,7 +315,8 @@ export async function runSubagent(rawInput: unknown): Promise<RunSubagentResult>
           status: "model_error",
           role: input.role,
           task_id: input.task_id,
-          provider: route.provider,
+          config_version: snapshot.configVersion,
+          provider: route.providerId,
           model: actualModel,
           error: { message: errMsg },
           usage,
@@ -303,7 +351,7 @@ export async function runSubagent(rawInput: unknown): Promise<RunSubagentResult>
           `actual=${wcResult.actualCount} ${wcResult.diff} ` +
           `task_id=${input.task_id}`
         );
-        const retryResult = await callLLMWithFallback(route, systemPrompt, userPrompt, {
+        const retryResult = await callLLMWithFallback(snapshot, providerConfig, route, systemPrompt, userPrompt, {
           temperature,
           maxTokens,
           timeoutMs,
@@ -330,7 +378,8 @@ export async function runSubagent(rawInput: unknown): Promise<RunSubagentResult>
           status: "model_error",
           role: input.role,
           task_id: input.task_id,
-          provider: route.provider,
+          config_version: snapshot.configVersion,
+          provider: route.providerId,
           model: actualModel,
           error: { message: errMsg },
           usage,
@@ -349,7 +398,8 @@ export async function runSubagent(rawInput: unknown): Promise<RunSubagentResult>
       status: "ok",
       role: input.role,
       task_id: input.task_id,
-      provider: route.provider,
+      config_version: snapshot.configVersion,
+      provider: route.providerId,
       model: actualModel,
       content,
       usage,
@@ -363,7 +413,8 @@ export async function runSubagent(rawInput: unknown): Promise<RunSubagentResult>
       status: isTimeout ? "timeout" : "model_error",
       role: input.role,
       task_id: input.task_id,
-      provider: route.provider,
+      config_version: snapshot.configVersion,
+      provider: route.providerId,
       model: route.model,
       error: { message: msg },
       elapsed_ms: Date.now() - t0,
@@ -384,7 +435,9 @@ export async function runSubagent(rawInput: unknown): Promise<RunSubagentResult>
 // chapter_writer / reviser 没有 fallback (provider=openai, 实测不限流).
 // =====================================================================
 async function callLLMWithFallback(
-  route: { role: Role; provider: string; model: string },
+  snapshot: ActiveConfigSnapshot,
+  providerConfig: ProviderConfig,
+  route: { role: Role; provider: string; providerId: string; model: string },
   systemPrompt: string,
   userPrompt: string,
   opts: { temperature: number; maxTokens: number; timeoutMs: number }
@@ -396,7 +449,7 @@ async function callLLMWithFallback(
 }> {
   // 第一次: 首选 model
   try {
-    const result = await callLLMOnce(route.provider, route.model, systemPrompt, userPrompt, opts);
+    const result = await callLLMOnce(providerConfig, route.model, systemPrompt, userPrompt, snapshot, opts);
     return { ...result, usedFallback: false };
   } catch (firstErr) {
     const firstMsg = firstErr instanceof Error ? firstErr.message : String(firstErr);
@@ -405,10 +458,7 @@ async function callLLMWithFallback(
       throw firstErr;
     }
     // 检查是否有 fallback
-    const fallbackModel = getFallbackModelForRole(
-      route.role,
-      route.provider as "openai" | "gemini"
-    );
+    const fallbackModel = getFallbackModelForRole(snapshot, route.role);
     if (!fallbackModel || fallbackModel === route.model) {
       throw firstErr; // 没 fallback 或 fallback 跟首选一样 → 直接抛
     }
@@ -417,11 +467,12 @@ async function callLLMWithFallback(
     );
     // 重试 fallback
     const result = await callLLMOnce(
-      route.provider,
+      providerConfig,
       fallbackModel,
       systemPrompt,
       userPrompt,
-      opts
+      snapshot,
+      opts,
     );
     return {
       ...result,
@@ -432,23 +483,35 @@ async function callLLMWithFallback(
 }
 
 async function callLLMOnce(
-  provider: string,
+  providerConfig: ProviderConfig,
   model: string,
   systemPrompt: string,
   userPrompt: string,
+  snapshot: ActiveConfigSnapshot,
   opts: { temperature: number; maxTokens: number; timeoutMs: number }
 ): Promise<{ content: string; usage?: RunSubagentResult["usage"] }> {
-  if (provider === "openai") {
-    const result = await callOpenAICompatible({
-      model,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-      temperature: opts.temperature,
-      max_tokens: opts.maxTokens,
-      timeoutMs: opts.timeoutMs,
-    });
+  const resolved = configStore.resolveProviderSecret(providerConfig);
+
+  if (providerConfig.adapter === "openai-compatible") {
+    const result = await callOpenAICompatible(
+      {
+        model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: opts.temperature,
+        max_tokens: opts.maxTokens,
+        timeoutMs: opts.timeoutMs,
+      },
+      {
+        baseUrl: providerConfig.baseUrl,
+        apiKey: resolved.secret,
+        defaultTemperature: snapshot.runtime.defaultTemperature,
+        defaultMaxTokens: snapshot.runtime.defaultMaxTokens,
+        defaultTimeoutMs: providerConfig.defaultTimeoutMs || snapshot.runtime.defaultTimeoutMs,
+      },
+    );
     return {
       content: result.content,
       usage: result.usage
@@ -460,15 +523,25 @@ async function callLLMOnce(
         : undefined,
     };
   }
-  if (provider === "gemini") {
-    const result = await callGeminiNative({
-      model,
-      systemPrompt,
-      userPrompt,
-      temperature: opts.temperature,
-      maxOutputTokens: opts.maxTokens,
-      timeoutMs: opts.timeoutMs,
-    });
+  if (providerConfig.adapter === "gemini-native") {
+    const result = await callGeminiNative(
+      {
+        model,
+        systemPrompt,
+        userPrompt,
+        temperature: opts.temperature,
+        maxOutputTokens: opts.maxTokens,
+        timeoutMs: opts.timeoutMs,
+      },
+      {
+        baseUrl: providerConfig.baseUrl,
+        apiKey: resolved.secret,
+        authMode: providerConfig.authMode ?? "both",
+        defaultTemperature: snapshot.runtime.defaultTemperature,
+        defaultMaxTokens: snapshot.runtime.defaultMaxTokens,
+        defaultTimeoutMs: providerConfig.defaultTimeoutMs || snapshot.runtime.defaultTimeoutMs,
+      },
+    );
     return {
       content: result.content,
       usage: result.usage
@@ -481,5 +554,5 @@ async function callLLMOnce(
         : undefined,
     };
   }
-  throw new Error(`Unsupported provider: ${provider}`);
+  throw new Error(`Unsupported provider adapter: ${providerConfig.adapter}`);
 }

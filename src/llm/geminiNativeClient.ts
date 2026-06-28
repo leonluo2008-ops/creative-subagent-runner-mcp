@@ -3,7 +3,6 @@
 // 适配 juxinapi: https://api.jxincm.cn/v1beta/models/{model}:generateContent
 // 支持 Bearer / query key / both 三种鉴权模式
 // =====================================================================
-import { env } from "../utils/env.js";
 import { safeError } from "../security/redact.js";
 
 export interface GeminiRequest {
@@ -13,6 +12,15 @@ export interface GeminiRequest {
   temperature?: number;
   maxOutputTokens?: number;
   timeoutMs?: number;
+}
+
+export interface GeminiRuntime {
+  baseUrl: string;
+  apiKey: string;
+  authMode: "bearer" | "key_query" | "both";
+  defaultTemperature: number;
+  defaultMaxTokens: number;
+  defaultTimeoutMs: number;
 }
 
 export interface GeminiResponse {
@@ -28,11 +36,11 @@ export interface GeminiResponse {
 /**
  * 构造两种 URL: Bearer 模式 / query key 模式
  */
-function buildUrls(model: string): { bearerUrl: string; keyQueryUrl: string } {
-  const base = `${env.GEMINI_BASE_URL}/v1beta/models/${model}:generateContent`;
+function buildUrls(runtime: GeminiRuntime, model: string): { bearerUrl: string; keyQueryUrl: string } {
+  const base = `${runtime.baseUrl}/v1beta/models/${model}:generateContent`;
   return {
     bearerUrl: base,
-    keyQueryUrl: `${base}?key=${encodeURIComponent(env.GEMINI_API_KEY)}`,
+    keyQueryUrl: `${base}?key=${encodeURIComponent(runtime.apiKey)}`,
   };
 }
 
@@ -40,7 +48,7 @@ function buildUrls(model: string): { bearerUrl: string; keyQueryUrl: string } {
  * 构造 Gemini 原生请求体
  * Gemini 没有 system role 字段，惯例是把 system prompt 拼到 user prompt 头部
  */
-function buildBody(req: GeminiRequest) {
+function buildBody(req: GeminiRequest, runtime: GeminiRuntime) {
   const userText = req.systemPrompt
     ? `[SYSTEM]\n${req.systemPrompt}\n\n[USER]\n${req.userPrompt}`
     : req.userPrompt;
@@ -53,8 +61,8 @@ function buildBody(req: GeminiRequest) {
       },
     ],
     generationConfig: {
-      temperature: req.temperature ?? env.DEFAULT_TEMPERATURE,
-      maxOutputTokens: req.maxOutputTokens ?? env.DEFAULT_MAX_TOKENS,
+      temperature: req.temperature ?? runtime.defaultTemperature,
+      maxOutputTokens: req.maxOutputTokens ?? runtime.defaultMaxTokens,
     },
   };
 }
@@ -63,6 +71,7 @@ function buildBody(req: GeminiRequest) {
  * 尝试一种鉴权方式，返回响应 + 是否成功
  */
 async function tryAuth(
+  runtime: GeminiRuntime,
   url: string,
   useBearer: boolean,
   body: object,
@@ -76,7 +85,7 @@ async function tryAuth(
       "Content-Type": "application/json",
     };
     if (useBearer) {
-      headers.Authorization = `Bearer ${env.GEMINI_API_KEY}`;
+      headers.Authorization = `Bearer ${runtime.apiKey}`;
     }
 
     const response = await fetch(url, {
@@ -125,12 +134,15 @@ interface GeminiRawResponse {
  * 调用 Gemini 原生 endpoint
  * 根据 GEMINI_AUTH_MODE 自动选择鉴权模式
  */
-export async function callGeminiNative(req: GeminiRequest): Promise<GeminiResponse> {
-  const { bearerUrl, keyQueryUrl } = buildUrls(req.model);
-  const body = buildBody(req);
-  const timeoutMs = req.timeoutMs ?? env.DEFAULT_TIMEOUT_MS;
+export async function callGeminiNative(
+  req: GeminiRequest,
+  runtime: GeminiRuntime,
+): Promise<GeminiResponse> {
+  const { bearerUrl, keyQueryUrl } = buildUrls(runtime, req.model);
+  const body = buildBody(req, runtime);
+  const timeoutMs = req.timeoutMs ?? runtime.defaultTimeoutMs;
 
-  const modes = env.GEMINI_AUTH_MODE;
+  const modes = runtime.authMode;
   const attempts: Array<{ url: string; useBearer: boolean; label: string }> = [];
 
   if (modes === "bearer" || modes === "both") {
@@ -147,7 +159,7 @@ export async function callGeminiNative(req: GeminiRequest): Promise<GeminiRespon
   let lastError = "";
 
   for (const attempt of attempts) {
-    const result = await tryAuth(attempt.url, attempt.useBearer, body, timeoutMs);
+    const result = await tryAuth(runtime, attempt.url, attempt.useBearer, body, timeoutMs);
     if (result.ok) {
       const text = result.data.candidates?.[0]?.content?.parts
         ?.map((p) => p.text ?? "")

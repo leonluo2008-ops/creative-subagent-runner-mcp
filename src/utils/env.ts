@@ -22,6 +22,7 @@ const envSchema = z.object({
 
   // ---- MCP 自身鉴权（不是模型 key） ----
   MCP_AUTH_TOKEN: z.string().min(32, "MCP_AUTH_TOKEN must be at least 32 chars"),
+  ADMIN_TOKEN: z.string().min(32, "ADMIN_TOKEN must be at least 32 chars"),
 
   // ---- OpenAI-compatible ----
   OPENAI_BASE_URL: z.string().url(),
@@ -100,6 +101,7 @@ export function logStartupConfig() {
   console.log(`PORT:            ${env.PORT}`);
   console.log(`HOST:            ${env.HOST}`);
   console.log(`MCP_AUTH_TOKEN:  ${env.MCP_AUTH_TOKEN.slice(0, 4)}...${env.MCP_AUTH_TOKEN.slice(-4)} (len=${env.MCP_AUTH_TOKEN.length})`);
+  console.log(`ADMIN_TOKEN:     ${env.ADMIN_TOKEN.slice(0, 4)}...${env.ADMIN_TOKEN.slice(-4)} (len=${env.ADMIN_TOKEN.length})`);
   console.log(`OPENAI_BASE_URL: ${env.OPENAI_BASE_URL}`);
   console.log(`OPENAI_API_KEY:  ${env.OPENAI_API_KEY.slice(0, 4)}...${env.OPENAI_API_KEY.slice(-4)} (len=${env.OPENAI_API_KEY.length})`);
   console.log(`GEMINI_BASE_URL: ${env.GEMINI_BASE_URL}`);

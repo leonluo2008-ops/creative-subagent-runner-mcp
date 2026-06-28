@@ -27,6 +27,9 @@ Thumbs.db
 logs/
 *.log
 
+# Runtime config snapshots
+config/state/
+
 # Test artifacts
 /tmp/
 /test-output/

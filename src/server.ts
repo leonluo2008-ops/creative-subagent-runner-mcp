@@ -1,20 +1,25 @@
-// =====================================================================
-// server.ts — Express + MCP Streamable HTTP transport
-// 第一版只暴露一个工具: health_check
-// 全部请求必须带 Bearer Token
-// =====================================================================
 import express, { type Request, type Response } from "express";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import { env, logStartupConfig } from "./utils/env.js";
-import { bearerAuth } from "./security/auth.js";
+import { adminAuth, bearerAuth } from "./security/auth.js";
 import { healthCheck } from "./tools/healthCheck.js";
 import { listSubagentRoles } from "./tools/listSubagentRoles.js";
 import { runSubagent } from "./tools/runSubagent.js";
 import { safeError } from "./security/redact.js";
+import { configStore } from "./store/configStore.js";
+import { adminProviderInputSchema } from "./store/types.js";
 
 type ToolRole = "chapter_writer" | "structure_auditor" | "style_auditor" | "reviser";
+const roleSchema = z.enum(["chapter_writer", "structure_auditor", "style_auditor", "reviser"]);
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const projectRoot = path.resolve(__dirname, "../");
+const adminPublicDir = path.join(projectRoot, "public", "admin");
 
 function jsonTextResult(payload: unknown) {
   return {
@@ -28,14 +33,16 @@ function jsonTextResult(payload: unknown) {
 }
 
 function buildRunSubagentInternalError(
+  snapshotVersion: string,
   params: Partial<{ role: ToolRole; task_id: string }>,
-  err: unknown
+  err: unknown,
 ) {
   const message = err instanceof Error ? err.message : String(err);
   return {
     status: "model_error" as const,
     role: params.role ?? "chapter_writer",
     task_id: params.task_id ?? "unknown",
+    config_version: snapshotVersion,
     error: {
       message: `run_subagent_internal_error: ${message}`,
     },
@@ -54,11 +61,10 @@ function createMcpServer() {
         tools: {},
       },
       instructions:
-        "Generic MCP server for running creative writing subagents via GPT/OpenAI-compatible and Gemini native APIs.",
-    }
+        "Generic MCP server for running creative writing subagents via configured providers and active config snapshots.",
+    },
   );
 
-  // ---- 注册 health_check 工具 ----
   server.tool(
     "health_check",
     "检查 MCP server 与 provider 配置状态。返回 provider 状态、角色路由、server 配置，**不包含任何 API Key 明文**。",
@@ -66,10 +72,9 @@ function createMcpServer() {
     async () => {
       const result = await healthCheck();
       return jsonTextResult(result);
-    }
+    },
   );
 
-  // ---- 注册 list_subagent_roles 工具 ----
   server.tool(
     "list_subagent_roles",
     "列出支持的子 agent 角色及其默认路由、必填字段。",
@@ -77,17 +82,16 @@ function createMcpServer() {
     async () => {
       const result = await listSubagentRoles();
       return jsonTextResult(result);
-    }
+    },
   );
 
-  // ---- 注册 run_subagent 工具 ----
   server.tool(
     "run_subagent",
     "运行指定角色的通用子 agent。返回结构化结果：写手/修稿返回 content，审计员返回 report。",
     {
-      role: z.enum(["chapter_writer", "structure_auditor", "style_auditor", "reviser"]).describe("子 agent 角色"),
+      role: roleSchema.describe("子 agent 角色"),
       task_id: z.string().min(1).describe("任务唯一 ID，用于日志追踪"),
-      provider: z.enum(["openai", "gemini"]).optional().describe("Provider（生产环境不允许覆盖默认）"),
+      provider: z.string().optional().describe("Provider ID 或 adapter 别名（生产环境不允许覆盖默认）"),
       model: z.string().optional().describe("具体模型（生产环境不允许覆盖默认）"),
       project_context: z
         .object({
@@ -139,112 +143,201 @@ function createMcpServer() {
         .optional(),
     },
     async (params) => {
+      const snapshot = configStore.getActiveSnapshot();
       try {
-        const result = await runSubagent(params);
+        const result = await runSubagent(params, snapshot);
         return jsonTextResult(result);
       } catch (err) {
         safeError("run_subagent_tool_failed", err);
-        return jsonTextResult(buildRunSubagentInternalError(params, err));
+        return jsonTextResult(buildRunSubagentInternalError(snapshot.configVersion, params, err));
       }
-    }
+    },
   );
 
   return server;
 }
 
-// ---- Express app ----
-const app = express();
-app.use(express.json({ limit: "10mb" }));
+async function createApp() {
+  await configStore.initialize();
 
-// 健康端点（不需要鉴权，给监控用）
-app.get("/healthz", (_req: Request, res: Response) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
-});
+  const app = express();
+  app.use(express.json({ limit: "10mb" }));
+  app.use(express.urlencoded({ extended: true }));
 
-// 根端点说明（不需要鉴权）
-app.get("/", (_req: Request, res: Response) => {
-  res.json({
-    name: "creative-subagent-runner-mcp",
-    version: "0.1.0",
-    transport: "streamable-http",
-    mcp_endpoint: "/mcp",
-    auth: "Bearer Token required for /mcp",
-  });
-});
-
-// MCP 端点（需要鉴权）
-app.post("/mcp", bearerAuth, async (req: Request, res: Response) => {
-  const server = createMcpServer();
-
-  // 每个请求用独立 transport (无状态模式)
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined, // 禁用 session 持久化，每请求一个 transport
+  app.get("/healthz", (_req: Request, res: Response) => {
+    const snapshot = configStore.getActiveSnapshot();
+    res.json({ status: "ok", timestamp: new Date().toISOString(), config_version: snapshot.configVersion });
   });
 
-  let closed = false;
-  const closeResources = async () => {
-    if (closed) return;
-    closed = true;
-    transport.close();
-    await server.close();
-  };
-
-  res.on("close", () => {
-    void closeResources();
+  app.get("/", (_req: Request, res: Response) => {
+    res.json({
+      name: "creative-subagent-runner-mcp",
+      version: "0.1.0",
+      transport: "streamable-http",
+      mcp_endpoint: "/mcp",
+      admin_ui: "/admin",
+      auth: {
+        mcp: "Bearer Token required for /mcp",
+        admin: "Bearer Admin Token required for /api/*",
+      },
+    });
   });
 
-  try {
-    await server.connect(transport);
-    await transport.handleRequest(req, res, req.body);
-  } catch (err) {
-    safeError("mcp_request_failed", err);
-    if (!res.headersSent) {
-      res.status(500).json({
-        jsonrpc: "2.0",
-        error: {
-          code: -32603,
-          message: "Internal server error",
-        },
-        id: null,
+  app.use("/admin", express.static(adminPublicDir, { extensions: ["html"] }));
+  app.get("/admin", (_req: Request, res: Response) => {
+    res.sendFile(path.join(adminPublicDir, "index.html"));
+  });
+
+  const adminRouter = express.Router();
+  adminRouter.use(adminAuth);
+
+  adminRouter.get("/config/roles", async (_req, res) => {
+    const draft = await configStore.getDraftConfig();
+    res.json({ roles: draft.roles });
+  });
+
+  adminRouter.put("/config/roles/:roleId", async (req, res) => {
+    const role = roleSchema.parse(req.params.roleId);
+    await configStore.saveRole(role, req.body);
+    res.json({ status: "ok", role });
+  });
+
+  adminRouter.get("/config/prompts/:roleId", async (req, res) => {
+    const role = roleSchema.parse(req.params.roleId);
+    const draft = await configStore.getDraftConfig();
+    res.json({ role, prompt: draft.prompts[role] });
+  });
+
+  adminRouter.put("/config/prompts/:roleId", async (req, res) => {
+    const role = roleSchema.parse(req.params.roleId);
+    const prompt = z.object({ prompt: z.string().min(1) }).parse(req.body);
+    await configStore.savePrompt(role, prompt.prompt);
+    res.json({ status: "ok", role });
+  });
+
+  adminRouter.get("/config/providers", async (_req, res) => {
+    const draft = await configStore.getDraftConfig();
+    res.json({ providers: configStore.getAdminProviderViews(draft) });
+  });
+
+  adminRouter.put("/config/providers", async (req, res) => {
+    const payload = z.array(adminProviderInputSchema).parse(req.body);
+    await configStore.saveAdminProviders(payload);
+    res.json({ status: "ok", count: payload.length });
+  });
+
+  adminRouter.get("/runtime", async (_req, res) => {
+    const draft = await configStore.getDraftConfig();
+    res.json(draft.runtime);
+  });
+
+  adminRouter.put("/runtime", async (req, res) => {
+    await configStore.saveRuntime(req.body);
+    res.json({ status: "ok" });
+  });
+
+  adminRouter.get("/config/current", async (_req, res) => {
+    res.json(await configStore.getAdminCurrentStatus());
+  });
+
+  adminRouter.delete("/config/providers/:providerId", async (req, res) => {
+    await configStore.deleteProvider(req.params.providerId);
+    res.json({ status: "ok", providerId: req.params.providerId });
+  });
+
+  adminRouter.post("/config/apply", async (_req, res) => {
+    const snapshot = await configStore.applyDraftConfig();
+    res.json({
+      status: "ok",
+      configVersion: snapshot.configVersion,
+      activatedAt: snapshot.activatedAt,
+    });
+  });
+
+  adminRouter.get("/health", async (_req, res) => {
+    res.json(await healthCheck());
+  });
+
+  adminRouter.post("/test/run-subagent", async (req, res) => {
+    const snapshot = configStore.getActiveSnapshot();
+    const result = await runSubagent(req.body, snapshot);
+    res.json(result);
+  });
+
+  app.use("/api", adminRouter);
+
+  app.post("/mcp", bearerAuth, async (req: Request, res: Response) => {
+    const server = createMcpServer();
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+    });
+
+    let closed = false;
+    const closeResources = async () => {
+      if (closed) return;
+      closed = true;
+      transport.close();
+      await server.close();
+    };
+
+    res.on("close", () => {
+      void closeResources();
+    });
+
+    try {
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+    } catch (err) {
+      safeError("mcp_request_failed", err);
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: "2.0",
+          error: {
+            code: -32603,
+            message: "Internal server error",
+          },
+          id: null,
+        });
+      }
+    } finally {
+      if (res.writableEnded) {
+        await closeResources();
+      }
+    }
+  });
+
+  app.all("/mcp", (req: Request, res: Response) => {
+    if (req.method !== "POST") {
+      res.status(405).json({
+        error: "method_not_allowed",
+        message: `MCP endpoint only accepts POST. Use ${req.method} on /healthz or / instead.`,
       });
     }
-  } finally {
-    if (res.writableEnded) {
-      await closeResources();
+  });
+
+  app.use((err: Error, _req: Request, res: Response, _next: express.NextFunction) => {
+    safeError("express_unhandled", err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "internal_error", message: err.message || "Internal server error" });
     }
-  }
-});
+  });
 
-// 405 handler for non-POST /mcp
-app.all("/mcp", (req: Request, res: Response) => {
-  if (req.method !== "POST") {
-    res.status(405).json({
-      error: "method_not_allowed",
-      message: `MCP endpoint only accepts POST. Use ${req.method} on /healthz or / instead.`,
-    });
-  }
-});
+  return app;
+}
 
-// 全局错误处理
-app.use((err: Error, _req: Request, res: Response, _next: express.NextFunction) => {
-  safeError("express_unhandled", err);
-  if (!res.headersSent) {
-    res.status(500).json({ error: "internal_error", message: "Internal server error" });
-  }
-});
-
-// ---- 启动 ----
+const app = await createApp();
 const server = app.listen(env.PORT, env.HOST, () => {
   logStartupConfig();
   console.log(`\n✅ MCP server listening on http://${env.HOST}:${env.PORT}`);
   console.log(`   Health (no auth):   GET  http://${env.HOST}:${env.PORT}/healthz`);
   console.log(`   Root (no auth):     GET  http://${env.HOST}:${env.PORT}/`);
   console.log(`   MCP endpoint:       POST http://${env.HOST}:${env.PORT}/mcp  (Bearer auth required)`);
+  console.log(`   Admin UI:           GET  http://${env.HOST}:${env.PORT}/admin`);
+  console.log(`   Admin API:          /api/* (Bearer admin token required)`);
   console.log(`   PID:                ${process.pid}`);
   console.log(`   Started:            ${new Date().toISOString()}\n`);
 });
 
-// 优雅退出
 const shutdown = (signal: string) => {
   console.log(`\n[${signal}] shutting down...`);
   server.close(() => {

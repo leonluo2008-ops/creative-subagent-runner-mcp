@@ -3,30 +3,26 @@
 // 不暴露任何 API Key 内容，只暴露脱敏后的状态
 // =====================================================================
 import { env } from "../utils/env.js";
-import { getModelForRole, type Role } from "../llm/modelRouter.js";
+import { configStore } from "../store/configStore.js";
 
 export interface HealthCheckResult {
   status: "ok";
   version: string;
-  providers: {
-    openai: {
-      enabled: boolean;
-      base_url: string;
-      key_configured: boolean;
-      key_length: number;
-    };
-    gemini: {
-      enabled: boolean;
-      base_url: string;
-      key_configured: boolean;
-      key_length: number;
-      auth_mode: string;
-    };
-  };
+  config_version: string;
+  providers: Array<{
+    id: string;
+    adapter: string;
+    enabled: boolean;
+    base_url: string;
+    secret_ref: string;
+    secret_configured: boolean;
+    model_count: number;
+  }>;
   roles: Array<{
     role: string;
     provider: string;
     model: string;
+    fallback_model: string | null;
   }>;
   server: {
     node_env: string;
@@ -37,35 +33,31 @@ export interface HealthCheckResult {
 }
 
 export async function healthCheck(): Promise<HealthCheckResult> {
+  const snapshot = configStore.getActiveSnapshot();
   return {
     status: "ok",
     version: "0.1.0",
-    providers: {
-      openai: {
-        enabled: env.OPENAI_API_KEY.length > 0,
-        base_url: env.OPENAI_BASE_URL,
-        key_configured: env.OPENAI_API_KEY.length > 0,
-        key_length: env.OPENAI_API_KEY.length,
-      },
-      gemini: {
-        enabled: env.GEMINI_API_KEY.length > 0,
-        base_url: env.GEMINI_BASE_URL,
-        key_configured: env.GEMINI_API_KEY.length > 0,
-        key_length: env.GEMINI_API_KEY.length,
-        auth_mode: env.GEMINI_AUTH_MODE,
-      },
-    },
-    roles: [
-      { role: "chapter_writer", provider: env.WRITER_PROVIDER, model: getModelForRole("chapter_writer" as Role, env.WRITER_PROVIDER as any) },
-      { role: "structure_auditor", provider: env.STRUCTURE_AUDITOR_PROVIDER, model: getModelForRole("structure_auditor" as Role, env.STRUCTURE_AUDITOR_PROVIDER as any) },
-      { role: "style_auditor", provider: env.STYLE_AUDITOR_PROVIDER, model: getModelForRole("style_auditor" as Role, env.STYLE_AUDITOR_PROVIDER as any) },
-      { role: "reviser", provider: env.REVISER_PROVIDER, model: getModelForRole("reviser" as Role, env.REVISER_PROVIDER as any) },
-    ],
+    config_version: snapshot.configVersion,
+    providers: snapshot.providers.map((provider) => ({
+      id: provider.id,
+      adapter: provider.adapter,
+      enabled: provider.enabled,
+      base_url: provider.baseUrl,
+      secret_ref: provider.secretRef,
+      secret_configured: Boolean((process.env[provider.secretRef] ?? "").trim()),
+      model_count: provider.models.length,
+    })),
+    roles: snapshot.roles.map((role) => ({
+      role: role.role,
+      provider: role.providerId,
+      model: role.model,
+      fallback_model: role.fallbackModel,
+    })),
     server: {
       node_env: env.NODE_ENV,
-      allow_provider_override: env.ALLOW_PROVIDER_OVERRIDE,
-      max_input_chars: env.MAX_INPUT_CHARS,
-      max_output_tokens: env.MAX_OUTPUT_TOKENS,
+      allow_provider_override: snapshot.runtime.allowProviderOverride,
+      max_input_chars: snapshot.runtime.maxInputChars,
+      max_output_tokens: snapshot.runtime.maxOutputTokens,
     },
   };
 }

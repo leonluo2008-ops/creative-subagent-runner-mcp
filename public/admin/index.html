@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent Kernel Admin</title>
+  <link rel="stylesheet" href="/admin/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>Agent Kernel Admin</h1>
+      <p>面向管理员的 Agent Kernel 控制台：认证、草稿编辑、发布生效一条线完成。</p>
+    </div>
+    <div class="auth-box">
+      <label for="adminToken">Admin Token</label>
+      <input id="adminToken" name="adminToken" type="password" autocomplete="off" placeholder="输入 Admin Token…">
+      <div class="button-row">
+        <button id="saveTokenBtn">保存 Token</button>
+        <button id="refreshBtn">刷新状态</button>
+      </div>
+    </div>
+  </header>
+
+  <div id="globalStatus" class="status-banner status-info hidden" aria-live="polite"></div>
+
+  <section class="publish-bar">
+    <div id="publishMeta" class="publish-meta"></div>
+    <div class="button-row">
+      <button id="applyBtn" class="primary">发布草稿</button>
+    </div>
+  </section>
+
+  <main class="layout">
+    <section class="card">
+      <div class="card-header">
+        <h2>Overview</h2>
+      </div>
+      <div id="dashboardMeta" class="meta-grid"></div>
+      <details class="details-panel">
+        <summary>查看原始健康信息</summary>
+        <pre id="healthJson" class="json-box"></pre>
+      </details>
+    </section>
+
+    <section class="card">
+      <div class="card-header">
+        <h2>Providers</h2>
+        <div class="button-row">
+          <button id="addProviderBtn">新增 Provider</button>
+          <button id="saveProvidersBtn">保存 Providers</button>
+        </div>
+      </div>
+      <p>这里只需要填写 `Base URL`、`主模型名`、`API Key`。删除前会校验该 Provider 是否仍被角色引用。</p>
+      <div id="providersList" class="stack"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-header">
+        <h2>Roles</h2>
+        <button id="saveRolesBtn">保存全部 Roles</button>
+      </div>
+      <p>这里管理系统角色的路由关系。先看摘要，再按需展开编辑。</p>
+      <div id="rolesList" class="stack"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-header">
+        <h2>Prompts</h2>
+      </div>
+      <div id="promptMeta" class="subtle-meta"></div>
+      <div class="button-row" id="promptTabs"></div>
+      <textarea id="promptEditor" name="promptEditor" rows="18" autocomplete="off" placeholder="选择角色后开始编辑 Prompt…"></textarea>
+      <div class="button-row">
+        <button id="resetPromptBtn">恢复当前草稿</button>
+        <button id="savePromptBtn">保存当前 Prompt</button>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast hidden" aria-live="polite"></div>
+  <script type="module" src="/admin/app.js"></script>
+</body>
+</html>

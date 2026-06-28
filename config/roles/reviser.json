@@ -1,0 +1,13 @@
+{
+  "role": "reviser",
+  "description": "通用修稿 agent，根据审计报告修正文稿。",
+  "providerId": "gemini-default",
+  "model": "gemini-3.5-flash",
+  "fallbackModel": null,
+  "requiredInputFields": [
+    "chapter_context.existing_draft",
+    "chapter_context.previous_audit"
+  ],
+  "outputType": "content",
+  "enabled": true
+}

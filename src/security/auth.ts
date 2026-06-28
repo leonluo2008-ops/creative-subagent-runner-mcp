@@ -55,6 +55,30 @@ export function bearerAuth(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+export function adminAuth(req: Request, res: Response, next: NextFunction) {
+  const auth = req.headers.authorization;
+
+  if (!auth || !auth.startsWith("Bearer ")) {
+    res.status(401).json({
+      error: "unauthorized",
+      message: "Missing or invalid admin Authorization header. Expected: Bearer <admin-token>",
+    });
+    return;
+  }
+
+  const token = auth.slice("Bearer ".length).trim();
+  if (!constantTimeEqual(token, env.ADMIN_TOKEN)) {
+    safeError("admin_auth_failed", new Error(`invalid admin token from ${req.ip ?? "unknown"}`));
+    res.status(401).json({
+      error: "unauthorized",
+      message: "Invalid admin token.",
+    });
+    return;
+  }
+
+  next();
+}
+
 /**
  * 常量时间字符串比较
  */

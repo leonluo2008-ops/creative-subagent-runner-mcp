@@ -4,7 +4,7 @@
 // =====================================================================
 import type { Role } from "../llm/modelRouter.js";
 
-export interface RoleDefinition {
+export interface DefaultRoleDefinition {
   role: Role;
   description: string;
   systemPrompt: string;
@@ -15,7 +15,7 @@ export interface RoleDefinition {
 // =====================================================================
 // chapter_writer — 通用章节写手
 // =====================================================================
-const CHAPTER_WRITER: RoleDefinition = {
+const CHAPTER_WRITER: DefaultRoleDefinition = {
   role: "chapter_writer",
   description: "通用章节写手，根据项目上下文和章节 beats 写正文。",
   systemPrompt: `你是通用章节写手 agent。
@@ -61,7 +61,7 @@ const CHAPTER_WRITER: RoleDefinition = {
 // =====================================================================
 // structure_auditor — 通用结构审计员
 // =====================================================================
-const STRUCTURE_AUDITOR: RoleDefinition = {
+const STRUCTURE_AUDITOR: DefaultRoleDefinition = {
   role: "structure_auditor",
   description: "通用结构审计员，审计 L1/L0/L2/L3 一致性、章间承接和伏笔。",
   systemPrompt: `你是通用结构审计员 agent。
@@ -108,7 +108,7 @@ const STRUCTURE_AUDITOR: RoleDefinition = {
 // =====================================================================
 // style_auditor — 通用风格审计员
 // =====================================================================
-const STYLE_AUDITOR: RoleDefinition = {
+const STYLE_AUDITOR: DefaultRoleDefinition = {
   role: "style_auditor",
   description: "通用风格审计员，审计文风、反模式、项目禁区和目标读者适配。",
   systemPrompt: `你是通用风格审计员 agent。
@@ -153,7 +153,7 @@ const STYLE_AUDITOR: RoleDefinition = {
 // =====================================================================
 // reviser — 通用修稿 agent
 // =====================================================================
-const REVISER: RoleDefinition = {
+const REVISER: DefaultRoleDefinition = {
   role: "reviser",
   description: "通用修稿 agent，根据审计报告修正文稿。",
   systemPrompt: `你是通用修稿 agent。
@@ -191,19 +191,19 @@ const REVISER: RoleDefinition = {
 // =====================================================================
 // 注册表
 // =====================================================================
-export const ROLES: Record<Role, RoleDefinition> = {
+export const DEFAULT_ROLE_DEFINITIONS: Record<Role, DefaultRoleDefinition> = {
   chapter_writer: CHAPTER_WRITER,
   structure_auditor: STRUCTURE_AUDITOR,
   style_auditor: STYLE_AUDITOR,
   reviser: REVISER,
 };
 
-export function getRoleDefinition(role: Role): RoleDefinition {
-  const def = ROLES[role];
+export function getDefaultRoleDefinition(role: Role): DefaultRoleDefinition {
+  const def = DEFAULT_ROLE_DEFINITIONS[role];
   if (!def) throw new Error(`Unknown role: ${role}`);
   return def;
 }
 
-export function listRoles(): RoleDefinition[] {
-  return Object.values(ROLES);
+export function listDefaultRoles(): DefaultRoleDefinition[] {
+  return Object.values(DEFAULT_ROLE_DEFINITIONS);
 }

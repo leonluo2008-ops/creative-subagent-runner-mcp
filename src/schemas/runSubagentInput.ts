@@ -3,8 +3,7 @@
 // =====================================================================
 import { z } from "zod";
 import type { Role } from "../llm/modelRouter.js";
-import { getRoleDefinition } from "../roles/index.js";
-import { env } from "../utils/env.js";
+import type { ActiveConfigSnapshot } from "../store/types.js";
 
 // ---- 公共子 schema ----
 const ProjectContextSchema = z.object({
@@ -73,7 +72,7 @@ export type ValidationResult =
 /**
  * 校验 + 角色必填检查 + 输入大小限制
  */
-export function validateRunSubagentInput(raw: unknown): ValidationResult {
+export function validateRunSubagentInput(raw: unknown, snapshot: ActiveConfigSnapshot): ValidationResult {
   // 1. 顶层 schema
   const parsed = RunSubagentInputSchema.safeParse(raw);
   if (!parsed.success) {
@@ -88,16 +87,23 @@ export function validateRunSubagentInput(raw: unknown): ValidationResult {
 
   // 2. 输入大小限制
   const serialized = JSON.stringify(data);
-  if (serialized.length > env.MAX_INPUT_CHARS) {
+  if (serialized.length > snapshot.runtime.maxInputChars) {
     return {
       ok: false,
       status: "input_too_large",
-      message: `Input size ${serialized.length} chars exceeds MAX_INPUT_CHARS=${env.MAX_INPUT_CHARS}.`,
+      message: `Input size ${serialized.length} chars exceeds MAX_INPUT_CHARS=${snapshot.runtime.maxInputChars}.`,
     };
   }
 
   // 3. 角色必填字段检查
-  const roleDef = getRoleDefinition(data.role);
+  const roleDef = snapshot.roles.find((role) => role.role === data.role && role.enabled);
+  if (!roleDef) {
+    return {
+      ok: false,
+      status: "invalid_input",
+      message: `Role '${data.role}' is disabled or missing from active config.`,
+    };
+  }
   const missing: string[] = [];
 
   for (const fieldPath of roleDef.requiredInputFields) {

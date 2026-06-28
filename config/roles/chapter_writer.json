@@ -1,0 +1,18 @@
+{
+  "role": "chapter_writer",
+  "description": "通用章节写手，根据项目上下文和章节 beats 写正文。",
+  "providerId": "gemini-default",
+  "model": "gemini-3.5-flash",
+  "fallbackModel": null,
+  "requiredInputFields": [
+    "project_context.l1_core",
+    "project_context.l0_world",
+    "project_context.series_l2",
+    "project_context.current_season_l2",
+    "chapter_context.chapter_title",
+    "chapter_context.chapter_beats",
+    "style_rules"
+  ],
+  "outputType": "content",
+  "enabled": true
+}

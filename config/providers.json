@@ -1,0 +1,30 @@
+[
+  {
+    "id": "openai-default",
+    "label": "OpenAI Compatible Default",
+    "adapter": "openai-compatible",
+    "enabled": true,
+    "baseUrl": "https://api.jxincm.cn/v1",
+    "secretRef": "OPENAI_API_KEY",
+    "defaultModel": "gpt-5.4-mini",
+    "models": [
+      "gpt-5.4-mini"
+    ],
+    "defaultTimeoutMs": 120000
+  },
+  {
+    "id": "gemini-default",
+    "label": "Gemini Native Default",
+    "adapter": "gemini-native",
+    "enabled": true,
+    "baseUrl": "https://api.jxincm.cn",
+    "secretRef": "GEMINI_API_KEY",
+    "authMode": "both",
+    "defaultModel": "gemini-3.5-flash",
+    "models": [
+      "gemini-3.5-flash",
+      "gemini-3.1-pro-preview"
+    ],
+    "defaultTimeoutMs": 120000
+  }
+]

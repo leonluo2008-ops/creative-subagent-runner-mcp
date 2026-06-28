@@ -1,0 +1,13 @@
+{
+  "role": "style_auditor",
+  "description": "通用风格审计员，审计文风、反模式、项目禁区和目标读者适配。",
+  "providerId": "gemini-default",
+  "model": "gemini-3.5-flash",
+  "fallbackModel": "gemini-3.1-pro-preview",
+  "requiredInputFields": [
+    "chapter_context.existing_draft",
+    "style_rules"
+  ],
+  "outputType": "report",
+  "enabled": true
+}

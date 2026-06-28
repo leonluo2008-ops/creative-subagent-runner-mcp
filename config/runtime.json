@@ -1,0 +1,9 @@
+{
+  "allowProviderOverride": false,
+  "defaultTemperature": 0.7,
+  "defaultMaxTokens": 8192,
+  "defaultTimeoutMs": 120000,
+  "maxInputChars": 120000,
+  "maxOutputTokens": 8192,
+  "logLevel": "info"
+}

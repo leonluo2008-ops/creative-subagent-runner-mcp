@@ -1,0 +1,17 @@
+{
+  "role": "structure_auditor",
+  "description": "通用结构审计员，审计 L1/L0/L2/L3 一致性、章间承接和伏笔。",
+  "providerId": "gemini-default",
+  "model": "gemini-3.5-flash",
+  "fallbackModel": "gemini-3.1-pro-preview",
+  "requiredInputFields": [
+    "project_context.l1_core",
+    "project_context.l0_world",
+    "project_context.series_l2",
+    "project_context.current_season_l2",
+    "chapter_context.chapter_beats",
+    "chapter_context.existing_draft"
+  ],
+  "outputType": "report",
+  "enabled": true
+}
